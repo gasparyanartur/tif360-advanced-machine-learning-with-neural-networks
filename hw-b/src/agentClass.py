@@ -34,6 +34,7 @@ class TQAgent:
     def fn_init(self, gameboard: TGameBoard):
         self.gameboard = gameboard
         self.q_table = dict()
+        self.actions = dict()
 
         # This function should be written by you
         # Instructions:
@@ -75,27 +76,28 @@ class TQAgent:
     def fn_select_action(self):
         
         epsilon = self.epsilon
-        state = self.enc_state
+        enc_state = self.enc_state
 
-        if state in self.q_table:
-            q_values = self.q_table[state]
+        if enc_state in self.q_table:
+            q_values = self.q_table[enc_state]
+            actions = self.actions[enc_state]
 
         else:
-            valid_actions = []
+            actions = []
             curr_tile = self.gameboard.tiles[self.gameboard.cur_tile_type]
             n_orientations = len(curr_tile)
 
             for tile_orientation in range(n_orientations):
                 width = len(curr_tile[tile_orientation])
                 for tile_x in range(self.gameboard.N_col - width + 1):
-                    valid_actions.append((tile_x, tile_orientation))
+                    actions.append((tile_x, tile_orientation))
 
-            q_values = {a: 0 for a in valid_actions}
-            self.q_table[state] = q_values
+            q_values = {a: 0 for a in actions}
+            self.q_table[enc_state] = q_values
+            self.actions[enc_state] = actions
 
-
-        index = np.random.sample(self.n_actions) if (np.rand() < epsilon) else np.argmax(q_values)
-        tile_x, tile_orientation = self.actions[index]
+        i_action = np.random.randint(len(actions)) if (np.random.rand() < epsilon) else np.argmax(q_values)
+        tile_x, tile_orientation = actions[i_action]
         self.gameboard.fn_move(tile_x, tile_orientation)
 
         # TO BE COMPLETED BY STUDENT
