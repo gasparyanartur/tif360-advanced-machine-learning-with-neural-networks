@@ -35,16 +35,6 @@ class TQAgent:
         self.gameboard = gameboard
         self.q_table = dict()
 
-        n_pos = gameboard.N_col
-        n_ori = 4
-
-        tile_positions = np.repeat(np.arange(n_pos, dtype=int), n_ori)
-        tile_orientations = np.repeat(np.arange(n_ori, dtype=int), n_pos)
-        self.actions = np.vstack((tile_positions, tile_orientations)).T
-
-
-
-        # TO BE COMPLETED BY STUDENT
         # This function should be written by you
         # Instructions:
         # In this function you could set up and initialize the states, actions and Q-table and storage for the rewards
@@ -62,7 +52,12 @@ class TQAgent:
         # Here you can load the Q-table (to Q-table of self) from the input parameter strategy_file (used to test how the agent plays)
 
     def fn_read_state(self):
-        pass
+        n_tiles = len(self.gameboard.tiles)
+        board = self.gameboard.board
+        tile_type = self.gameboard.cur_tile_type
+
+        enc_state = encode_state(n_tiles, board, tile_type)
+        self.enc_state = enc_state
 
         # TO BE COMPLETED BY STUDENT
         # This function should be written by you
@@ -78,7 +73,31 @@ class TQAgent:
         # 'self.gameboard.cur_tile_type' identifier of the current tile that should be placed on the game board (integer between 0 and len(self.gameboard.tiles))
 
     def fn_select_action(self):
-        pass
+        
+        epsilon = self.epsilon
+        state = self.enc_state
+
+        if state in self.q_table:
+            q_values = self.q_table[state]
+
+        else:
+            valid_actions = []
+            curr_tile = self.gameboard.tiles[self.gameboard.cur_tile_type]
+            n_orientations = len(curr_tile)
+
+            for tile_orientation in range(n_orientations):
+                width = len(curr_tile[tile_orientation])
+                for tile_x in range(self.gameboard.N_col - width + 1):
+                    valid_actions.append((tile_x, tile_orientation))
+
+            q_values = {a: 0 for a in valid_actions}
+            self.q_table[state] = q_values
+
+
+        index = np.random.sample(self.n_actions) if (np.rand() < epsilon) else np.argmax(q_values)
+        tile_x, tile_orientation = self.actions[index]
+        self.gameboard.fn_move(tile_x, tile_orientation)
+
         # TO BE COMPLETED BY STUDENT
         # This function should be written by you
         # Instructions:
