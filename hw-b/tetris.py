@@ -12,13 +12,17 @@ PARAM_TASK2a=5
 PARAM_TASK2b=6
 
 # Choose to control the game yourself ('human_player=1') to test the setups in the different tasks
-human_player=0
-#human_player=1
+#human_player=0
+human_player=1
+
+#evaluate_agent = 0
+evaluate_agent = 1
+
 
 # Choose parameter sets for different tasks
-#param_set=PARAM_TASK1a
+param_set=PARAM_TASK1a
 #param_set=PARAM_TASK1b
-param_set=PARAM_TASK1c
+#param_set=PARAM_TASK1c
 #param_set=PARAM_TASK1d
 #param_set=PARAM_TASK2a
 #param_set=PARAM_TASK2b
@@ -26,7 +30,7 @@ param_set=PARAM_TASK1c
 # Use files to evaluate strategy
 # If you change 'strategy_file' to the location of a file containing a stored Q-table or Q-network, you can evaluate the success of the found strategy
 if param_set==PARAM_TASK1a:
-    strategy_file=''
+    strategy_file='./src/params/params-1a.json'
 elif param_set==PARAM_TASK1b:
     strategy_file=''
 elif param_set==PARAM_TASK1c:
@@ -37,12 +41,6 @@ elif param_set==PARAM_TASK2a:
     strategy_file=''
 elif param_set==PARAM_TASK2b:
     strategy_file=''
-
-if strategy_file:
-    evaluate_agent=1
-    human_player=1
-else:
-    evaluate_agent=0
 
 
 # The code below initializes the game parameters for the task selected by 'param_set'
@@ -159,15 +157,19 @@ else:
 
 if evaluate_agent:
     agent_evaluate=agent;
+    agent_evaluate.epsilon = 0
+
 if human_player:
     agent=agentClass.THumanAgent()
-        
+
 gameboard=gameboardClass.TGameBoard(N_row,N_col,tile_size,max_tile_count,agent,stochastic_prob)
 
-if evaluate_agent:
-    agent_evaluate.epsilon=0
-    agent_evaluate.fn_init(gameboard)
-    agent_evaluate.fn_load_strategy(strategy_file)
+if not human_player:
+    agent.fn_init(gameboard, strategy_file=strategy_file)
+
+elif evaluate_agent:
+    agent_evaluate.fn_init(gameboard, strategy_file=strategy_file)
+
 
 if isinstance(gameboard.agent,agentClass.THumanAgent):
     # The player is human
@@ -193,6 +195,7 @@ if isinstance(gameboard.agent,agentClass.THumanAgent):
         if isinstance(gameboard.agent,agentClass.THumanAgent):
             gameboard.agent.fn_turn(pygame)
         else:
+            print("how?")
             pygame.event.pump()
             for event in pygame.event.get():
                 if event.type==pygame.KEYDOWN:

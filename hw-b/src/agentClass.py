@@ -2,9 +2,29 @@ import numpy as np
 import random
 import math
 import h5py
+import json
 import matplotlib.pyplot as plt
 
 from src.gameboardClass import TGameBoard
+
+
+def pack_q_table(q_table, actions):
+    packed_data = {
+        "q_table": {k: list(v) for k, v in q_table.items()},
+        "actions": {k: v for k, v in actions.items()}
+    }
+
+    return packed_data
+
+
+def unpack_q_table(strategy_file):
+    with open(strategy_file, 'r') as f:
+        packed_data = json.load(f)
+
+    q_table = {int(k): np.array(v) for k, v in packed_data['q_table'].items()}    
+    actions = {int(k): v for k, v in packed_data['actions'].items()}    
+
+    return q_table, actions
 
 
 # This file provides the skeleton structure for the classes TQAgent and TDQNAgent to be completed by you, the student.
@@ -31,12 +51,11 @@ class TQAgent:
 
         occ = np.hstack((enc_board, enc_types))
         pow = self.pow_base << np.arange(occ.size)
-        code = pow@occ 
+        code = int(pow@occ)
 
         return code
-        """return f'{self.gameboard.cur_tile_type}|{self.gameboard.board}'"""
 
-    def fn_init(self, gameboard: TGameBoard):
+    def fn_init(self, gameboard: TGameBoard, strategy_file=''):
         self.episode_reward = 0
         self.gameboard = gameboard
         self.q_table = dict()
@@ -44,6 +63,10 @@ class TQAgent:
 
         self.enc_prev_state = None
         self.fn_read_state()
+
+        self.strategy_file = strategy_file
+        if strategy_file != '':
+            self.fn_load_strategy(strategy_file)
 
         # This function should be written by you
         # Instructions:
@@ -57,7 +80,8 @@ class TQAgent:
         # 'self.episode_count' the total number of episodes in the training
 
     def fn_load_strategy(self, strategy_file):
-        pass
+        self.q_table, self.actions = unpack_q_table(strategy_file)
+
         # TO BE COMPLETED BY STUDENT
         # Here you can load the Q-table (to Q-table of self) from the input parameter strategy_file (used to test how the agent plays)
 
@@ -138,7 +162,6 @@ class TQAgent:
         self.q_table[enc_prev_state][self.i_prev_action] = next_q
 
 
-
     def fn_turn(self):
         if self.gameboard.gameover:
             self.episode += 1
@@ -152,6 +175,12 @@ class TQAgent:
 
            
             if self.episode >= self.episode_count:
+                if self.strategy_file != '':
+                    packed_data = pack_q_table(self.q_table, self.actions)
+
+                    with open(self.strategy_file, 'w') as f:
+                        json.dump(packed_data, f)
+
                 plt.plot(np.arange(len(self.rewards)), self.rewards)
                 plt.plot(100*np.arange(len(self.avg_rewards)), self.avg_rewards)
                 plt.legend(['rewards', 'avg rewards'])
