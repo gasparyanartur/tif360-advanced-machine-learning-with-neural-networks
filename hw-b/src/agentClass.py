@@ -2,6 +2,7 @@ import numpy as np
 import random
 import math
 import h5py
+import gmpy2
 import json
 import matplotlib.pyplot as plt
 
@@ -33,7 +34,7 @@ def unpack_q_table(strategy_file):
 
 class TQAgent:
     # Agent for learning to play tetris using Q-learning
-    def __init__(self, alpha, epsilon, episode_count):
+    def __init__(self, alpha, epsilon, episode_count, moving_avg_size=100):
         # Initialize training parameters
         self.alpha = alpha
         self.epsilon = epsilon
@@ -42,20 +43,18 @@ class TQAgent:
 
         self.rewards = []
         self.avg_rewards = []
-        self.pow_base = np.array([1], dtype='longlong')
+        self.moving_avg_size = moving_avg_size
 
     def encode_state(self):
-        enc_types = np.zeros(len(self.gameboard.tiles), dtype=bool)
+        enc_types = np.zeros(len(self.gameboard.tiles), dtype=int)
         enc_types[self.gameboard.cur_tile_type] = 1
         enc_board = (self.gameboard.board==1).flatten()
-
-        occ = np.hstack((enc_board, enc_types))
-        pow = self.pow_base << np.arange(occ.size)
-        code = int(pow@occ)
+        occ = np.hstack((enc_types, enc_board))
+        code = int(gmpy2.pack(occ.tolist(), 1))
 
         return code
 
-    def fn_init(self, gameboard: TGameBoard, strategy_file=''):
+    def fn_init(self, gameboard: TGameBoard, task_name='', load_strategy=False, save_strategy=True, save_plot=True, show_plot=True):
         self.episode_reward = 0
         self.gameboard = gameboard
         self.q_table = dict()
@@ -64,47 +63,23 @@ class TQAgent:
         self.enc_prev_state = None
         self.fn_read_state()
 
-        self.strategy_file = strategy_file
-        if strategy_file != '':
-            self.fn_load_strategy(strategy_file)
+        self.task_name = task_name
 
-        # This function should be written by you
-        # Instructions:
-        # In this function you could set up and initialize the states, actions and Q-table and storage for the rewards
-        # This function should not return a value, store Q table etc as attributes of self
+        self.load_strategy = load_strategy
+        self.save_strategy = save_strategy
+        self.save_plot = save_plot
+        self.show_plot = show_plot
 
-        # Useful variables:
-        # 'gameboard.N_row' number of rows in gameboard
-        # 'gameboard.N_col' number of columns in gameboard
-        # 'len(gameboard.tiles)' number of different tiles
-        # 'self.episode_count' the total number of episodes in the training
+        if load_strategy:
+            self.fn_load_strategy(f'./src/params/params-{task_name}.json')
 
     def fn_load_strategy(self, strategy_file):
         self.q_table, self.actions = unpack_q_table(strategy_file)
 
-        # TO BE COMPLETED BY STUDENT
-        # Here you can load the Q-table (to Q-table of self) from the input parameter strategy_file (used to test how the agent plays)
-
     def fn_read_state(self):
-        #self.enc_state = encode_state(len(self.gameboard.tiles), self.gameboard.board, self.gameboard.cur_tile_type)
         self.enc_state = self.encode_state()
 
-        # TO BE COMPLETED BY STUDENT
-        # This function should be written by you
-        # Instructions:
-        # In this function you could calculate the current state of the gane board
-        # You can for example represent the state as an integer entry in the Q-table
-        # This function should not return a value, store the state as an attribute of self
-
-        # Useful variables:
-        # 'self.gameboard.N_row' number of rows in gameboard
-        # 'self.gameboard.N_col' number of columns in gameboard
-        # 'self.gameboard.board[index_row,index_col]' table indicating if row 'index_row' and column 'index_col' is occupied (+1) or free (-1)
-        # 'self.gameboard.cur_tile_type' identifier of the current tile that should be placed on the game board (integer between 0 and len(self.gameboard.tiles))
-
     def fn_select_action(self):
-        
-        epsilon = self.epsilon
         enc_state = self.enc_state
 
         if enc_state in self.q_table:
@@ -125,36 +100,13 @@ class TQAgent:
             self.q_table[enc_state] = q_values
             self.actions[enc_state] = actions
 
-        self.i_prev_action = i_action = np.random.randint(len(actions)) if (np.random.rand() < epsilon) else np.argmax(q_values)
+        self.i_prev_action = i_action = np.random.randint(len(actions)) \
+            if (np.random.rand() < self.epsilon) \
+            else np.argmax(q_values)
         tile_x, tile_orientation = actions[i_action]
         self.gameboard.fn_move(tile_x, tile_orientation)
 
-        # TO BE COMPLETED BY STUDENT
-        # This function should be written by you
-        # Instructions:
-        # Choose and execute an action, based on the Q-table or random if epsilon greedy
-        # This function should not return a value, store the action as an attribute of self and exectute the action by moving the tile to the desired position and orientation
-
-        # Useful variables:
-        # 'self.epsilon' parameter epsilon in epsilon-greedy policy
-
-        # Useful functions
-        # 'self.gameboard.fn_move(tile_x,tile_orientation)' use this function to execute the selected action
-        # The input argument 'tile_x' contains the column of the tile (0 <= tile_x < self.gameboard.N_col)
-        # The input argument 'tile_orientation' contains the number of 90 degree rotations of the tile (0 < tile_orientation < # of non-degenerate rotations)
-        # The function returns 1 if the action is not valid and 0 otherwise
-        # You can use this function to map out which actions are valid or not
-
     def fn_reinforce(self, enc_prev_state, reward):
-        # TO BE COMPLETED BY STUDENT
-        # This function should be written by you
-        # Instructions:
-        # Update the Q table using state and action stored as attributes in self and using function arguments for the old state and the reward
-        # This function should not return a value, the Q table is stored as an attribute of self
-
-        # Useful variables:
-        # 'self.alpha' learning rate
-
         prev_q = self.q_table[enc_prev_state][self.i_prev_action]
         max_q = self.q_table[self.enc_state].max() if (self.enc_state in self.q_table) else 0
 
@@ -168,44 +120,44 @@ class TQAgent:
             self.rewards.append(self.episode_reward)
             self.episode_reward = 0
 
-            if self.episode % 100 == 0:
-                avg_reward = np.mean(self.rewards[self.episode-100:self.episode])
+            if self.episode % self.moving_avg_size == 0:
+                avg_reward = np.mean(self.rewards[self.episode-self.moving_avg_size:self.episode])
                 self.avg_rewards.append(avg_reward)
-                print(f'Episode: {self.episode}/{self.episode_count}, Mean reward: {avg_reward}')
+                print(f'Episode: {self.episode}/{self.episode_count}, Mean reward [T={self.moving_avg_size}]: {avg_reward}')
 
-           
             if self.episode >= self.episode_count:
-                if self.strategy_file != '':
-                    packed_data = pack_q_table(self.q_table, self.actions)
-
-                    with open(self.strategy_file, 'w') as f:
-                        json.dump(packed_data, f)
-
-                plt.plot(np.arange(len(self.rewards)), self.rewards)
-                plt.plot(100*np.arange(len(self.avg_rewards)), self.avg_rewards)
-                plt.legend(['rewards', 'avg rewards'])
-                plt.show()
+                self.fn_save_metrics()
                 raise SystemExit(0)
+
             else:
                 self.gameboard.fn_restart()
 
         else:
-            # Select and execute action (move the tile to the desired column and orientation)
             self.fn_select_action()
-            # TO BE COMPLETED BY STUDENT
-            # Here you should write line(s) to copy the old state into the variable 'old_state' which is later passed to fn_reinforce()
             enc_prev_state = self.enc_state
-
-            # Drop the tile on the game board
             reward = self.gameboard.fn_drop()
-            # TO BE COMPLETED BY STUDENT
-            # Here you should write line(s) to add the current reward to the total reward for the current episode, so you can save it to disk later
             self.episode_reward += reward
-
-            # Read the new state
-            self.fn_read_state()
-            # Update the Q-table using the old state and the reward (the new state and the taken action should be stored as attributes in self)
             self.fn_reinforce(enc_prev_state, reward)
+
+    def fn_save_metrics(self):
+        if self.save_strategy:
+            packed_data = pack_q_table(self.q_table, self.actions)
+
+            with open(f'./src/params/params-{self.task_name}.json', 'w') as f:
+                json.dump(packed_data, f)
+
+        plt.plot(np.arange(len(self.rewards)), self.rewards)
+        plt.plot(self.moving_avg_size*np.arange(len(self.avg_rewards)), self.avg_rewards)
+        plt.legend(['Rewards', f'Moving average [T={self.moving_avg_size}]'])
+        plt.title(f'Rewards and moving average rewards over episode, task {self.task_name}')
+        plt.xlabel(r'Episode $E$')
+        plt.ylabel(r'Reward $R$')
+        
+        if self.save_plot:
+            plt.savefig(f'./src/plots/fig-{self.task_name}.png')
+
+        if self.show_plot:
+            plt.show()
 
 
 class TDQNAgent:

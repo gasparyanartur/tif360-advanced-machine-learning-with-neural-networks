@@ -12,18 +12,21 @@ PARAM_TASK2a=5
 PARAM_TASK2b=6
 
 # Choose to control the game yourself ('human_player=1') to test the setups in the different tasks
-#human_player=0
-human_player=1
+human_player=0
+#human_player=1
 
-#evaluate_agent = 0
-evaluate_agent = 1
+evaluate_agent = 0
+#evaluate_agent = 1
+
+if evaluate_agent:
+    human_player=1
 
 
 # Choose parameter sets for different tasks
-param_set=PARAM_TASK1a
+#param_set=PARAM_TASK1a
 #param_set=PARAM_TASK1b
 #param_set=PARAM_TASK1c
-#param_set=PARAM_TASK1d
+param_set=PARAM_TASK1d
 #param_set=PARAM_TASK2a
 #param_set=PARAM_TASK2b
 
@@ -32,15 +35,15 @@ param_set=PARAM_TASK1a
 if param_set==PARAM_TASK1a:
     strategy_file='./src/params/params-1a.json'
 elif param_set==PARAM_TASK1b:
-    strategy_file=''
+    strategy_file='./src/params/params-1b.json'
 elif param_set==PARAM_TASK1c:
-    strategy_file=''
+    strategy_file='./src/params/params-1c.json'
 elif param_set==PARAM_TASK1d:
-    strategy_file=''
+    strategy_file='./src/params/params-1d.json'
 elif param_set==PARAM_TASK2a:
-    strategy_file=''
+    strategy_file='./src/params/params-2a.json'
 elif param_set==PARAM_TASK2b:
-    strategy_file=''
+    strategy_file='./src/params/params-2b.json'
 
 
 # The code below initializes the game parameters for the task selected by 'param_set'
@@ -70,6 +73,7 @@ if param_set==PARAM_TASK1a:
     alpha=0.2
     epsilon=0
     episode_count=1000
+    task_name = '1a'
 
     if (not human_player) or evaluate_agent:
         agent=agentClass.TQAgent(alpha,epsilon,episode_count)
@@ -83,6 +87,7 @@ elif param_set==PARAM_TASK1b:
     alpha=0.2
     epsilon=0.001
     episode_count=10000
+    task_name = '1b'
 
     if (not human_player) or evaluate_agent:
         agent=agentClass.TQAgent(alpha,epsilon,episode_count)
@@ -96,6 +101,7 @@ elif param_set==PARAM_TASK1c:
     alpha=0.2
     epsilon=0.001
     episode_count=200000
+    task_name = '1c'
 
     if (not human_player) or evaluate_agent:
         agent=agentClass.TQAgent(alpha,epsilon,episode_count)
@@ -105,6 +111,7 @@ elif param_set==PARAM_TASK1d:
     tile_size=4
     max_tile_count=50
     stochastic_prob=1
+    task_name = '1d'
 
     alpha=0.2
     epsilon=0.001
@@ -118,6 +125,7 @@ elif param_set==PARAM_TASK2a:
     tile_size=2
     max_tile_count=50
     stochastic_prob=1
+    task_name = '2a'
 
     alpha=0.001
     epsilon=0.001
@@ -146,6 +154,7 @@ elif param_set==PARAM_TASK2b:
     replay_buffer_size=10000
     batch_size=32
     sync_target_episode_count=100
+    task_name = '2b'
 
     if (not human_player) or evaluate_agent:
         agent=agentClass.TDQNAgent(alpha,epsilon,epsilon_scale,replay_buffer_size,batch_size,sync_target_episode_count,episode_count)
@@ -165,10 +174,10 @@ if human_player:
 gameboard=gameboardClass.TGameBoard(N_row,N_col,tile_size,max_tile_count,agent,stochastic_prob)
 
 if not human_player:
-    agent.fn_init(gameboard, strategy_file=strategy_file)
+    agent.fn_init(gameboard, load_strategy=False, save_plot=True, show_plot=True, save_strategy=True, task_name=task_name)
 
 elif evaluate_agent:
-    agent_evaluate.fn_init(gameboard, strategy_file=strategy_file)
+    agent_evaluate.fn_init(gameboard, load_strategy=True, save_plot=False, show_plot=False, save_strategy=False, task_name=task_name)
 
 
 if isinstance(gameboard.agent,agentClass.THumanAgent):
