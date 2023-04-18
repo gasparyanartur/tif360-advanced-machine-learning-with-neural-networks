@@ -196,6 +196,8 @@ class TDQNAgent:
         self.save_strategy = save_strategy
         self.save_plot = save_plot
         self.show_plot = show_plot
+
+        #print(self.gameboard.board)
         # TO BE COMPLETED BY STUDENT
         # This function should be written by you
         # Instructions:
@@ -218,6 +220,7 @@ class TDQNAgent:
         # Here you can load the Q-network (to Q-network of self) from the strategy_file
 
     def fn_read_state(self):
+        print(self.gameboard.board)
         pass
         # TO BE COMPLETED BY STUDENT
         # This function should be written by you
@@ -316,7 +319,6 @@ class THumanAgent:
         self.gameboard = gameboard
 
     def fn_read_state(self):
-        print(self.gameboard.board)
         pass
 
     def fn_turn(self, pygame):
