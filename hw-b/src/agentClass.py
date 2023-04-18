@@ -8,6 +8,9 @@ import matplotlib.pyplot as plt
 
 from src.gameboardClass import TGameBoard
 
+import torch
+from torch import nn
+
 
 def pack_q_table(q_table, actions):
     packed_data = {
@@ -26,6 +29,11 @@ def unpack_q_table(strategy_file):
     actions = {int(k): v for k, v in packed_data['actions'].items()}    
 
     return q_table, actions
+
+
+class QNetwork(nn.Module):
+    def __init__(self, ) -> None:
+        super().__init__()
 
 
 # This file provides the skeleton structure for the classes TQAgent and TDQNAgent to be completed by you, the student.
@@ -162,7 +170,7 @@ class TQAgent:
 
 class TDQNAgent:
     # Agent for learning to play tetris using Q-learning
-    def __init__(self, alpha, epsilon, epsilon_scale, replay_buffer_size, batch_size, sync_target_episode_count, episode_count):
+    def __init__(self, alpha, epsilon, epsilon_scale, replay_buffer_size, batch_size, sync_target_episode_count, episode_count, moving_avg_size=100):
         # Initialize training parameters
         self.alpha = alpha
         self.epsilon = epsilon
@@ -173,14 +181,28 @@ class TDQNAgent:
         self.episode = 0
         self.episode_count = episode_count
 
-    def fn_init(self, gameboard):
+        self.rewards = []
+        self.avg_rewards = []
+        self.moving_avg_size = moving_avg_size
+
+    def fn_init(self, gameboard, task_name=None, load_strategy=False, save_strategy=False, save_plot=False, show_plot=False):
         self.gameboard = gameboard
+        self.exp_buffer = np.zeros(self.replay_buffer_size)
+        self.reward_tots = np.zeros(self.episode_count)
+
+        self.task_name = task_name
+
+        self.load_strategy = load_strategy
+        self.save_strategy = save_strategy
+        self.save_plot = save_plot
+        self.show_plot = show_plot
         # TO BE COMPLETED BY STUDENT
         # This function should be written by you
         # Instructions:
         # In this function you could set up and initialize the states, actions, the Q-networks (one for calculating actions and one target network), experience replay buffer and storage for the rewards
         # You can use any framework for constructing the networks, for example pytorch or tensorflow
         # This function should not return a value, store Q network etc as attributes of self
+        
 
         # Useful variables:
         # 'gameboard.N_row' number of rows in gameboard
@@ -294,6 +316,7 @@ class THumanAgent:
         self.gameboard = gameboard
 
     def fn_read_state(self):
+        print(self.gameboard.board)
         pass
 
     def fn_turn(self, pygame):
