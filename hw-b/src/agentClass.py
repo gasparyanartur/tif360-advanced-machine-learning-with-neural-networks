@@ -8,8 +8,78 @@ import matplotlib.pyplot as plt
 
 from src.gameboardClass import TGameBoard
 
+import numpy as np
 import torch
 from torch import nn
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+class SmallStateAutoEncoder(nn.Module):
+    def __init__(self, d_L, d_H) -> None:
+        super().__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(1, 16, 2, padding=1),
+            nn.ReLU(),
+            nn.Flatten(1),   # dim 
+            nn.Linear(400, d_H),
+            nn.ReLU(),
+            nn.Linear(d_H, d_L),
+            nn.ReLU(),
+        )        
+
+        self.decoder = nn.Sequential(
+            nn.Linear(d_L, d_H),
+            nn.ReLU(),
+            nn.Linear(d_H, 256),
+            nn.ReLU(),
+            nn.Unflatten(1, (16, 4, 4)),
+            nn.ConvTranspose2d(16, 1, 1, stride=1, padding=0),
+        )
+
+
+    def forward(self, x):
+        x = self.encoder(x)
+        x = self.decoder(x)
+        return torch.tanh(x)
+
+
+class LargeStateAutoEncoder(nn.Module):
+    def __init__(self, d_L, d_H) -> None:
+        super().__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, 2, padding=1),
+            nn.ReLU(),
+            nn.Flatten(1),
+            nn.Linear(5184, d_H),
+            nn.ReLU(),
+            nn.Linear(d_H, d_H),
+            nn.ReLU(),
+            nn.Linear(d_H, d_L),
+            nn.ReLU(),
+        )        
+
+        self.decoder = nn.Sequential(
+            nn.Linear(d_L, d_H),
+            nn.ReLU(),
+            nn.Linear(d_H, d_H),
+            nn.ReLU(),
+            nn.Linear(d_H, 5184),
+            nn.ReLU(),
+            nn.Unflatten(1, (64, 9, 9)),
+            nn.ConvTranspose2d(64, 32, 1, stride=1, padding=0),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 1, 2, stride=1, padding=1),
+        )
+
+    def forward(self, x):
+        x = self.encoder(x)
+        x = self.decoder(x)
+        return torch.tanh(x)
+        
 
 
 def pack_q_table(q_table, actions):
@@ -31,9 +101,21 @@ def unpack_q_table(strategy_file):
     return q_table, actions
 
 
-class QNetwork(nn.Module):
-    def __init__(self, ) -> None:
+class QNetworkSmall(nn.Module):
+    def __init__(self) -> None:
         super().__init__()
+
+
+
+        self.linear = nn.Sequential(
+            nn.Linear(36, 32),
+            nn.ReLU(),
+            nn.Linear(32, 17),
+            nn.Softmax()
+        )
+
+    def forward(self, board, tile_id):
+        
 
 
 # This file provides the skeleton structure for the classes TQAgent and TDQNAgent to be completed by you, the student.
@@ -197,6 +279,56 @@ class TDQNAgent:
         self.save_plot = save_plot
         self.show_plot = show_plot
 
+        self.is_large = self.gameboard.tile_size > 2
+
+        if self.is_large:
+            ae = SmallStateAutoEncoder(32, 64).to(device)
+            ae.load_state_dict(torch.load('./src/models/ae_small.pt'))
+        else:
+            ae = LargeStateAutoEncoder(32, 128)
+            ae.load_state_dict(torch.load('./src/models/ae_large.pt'))
+        ae.eval()
+
+        self.state_encoder = ae.encoder
+        self.state_encoder.eval()
+
+        
+        if self.is_large:
+            self.tile_encoder = {
+                (0, 0): 0,
+                (0, 1): 1,
+                (1, 0): 2,
+                (1, 1): 3,
+                (2, 0): 4,
+                (2, 1): 5,
+                (3, 0): 6,
+                (3, 1): 7,
+                (3, 2): 8,
+                (3, 3): 9,
+                (4, 0): 10,
+                (4, 1): 11,
+                (4, 2): 12,
+                (4, 3): 13,
+                (5, 0): 14,
+                (5, 1): 15,
+                (5, 2): 16,
+                (5, 3): 17,
+                (6, 0): 18
+            }
+        else:
+            self.tile_encoder = {
+                (0, 0): 0,
+                (0, 1): 1,
+                (1, 0): 2,
+                (1, 1): 3,
+                (2, 0): 4,
+                (2, 1): 5,
+                (2, 2): 6,
+                (2, 3): 7,
+                (3, 0): 8
+            }
+
+
         #print(self.gameboard.board)
         # TO BE COMPLETED BY STUDENT
         # This function should be written by you
@@ -214,20 +346,19 @@ class TDQNAgent:
         # 'self.episode_count' the total number of episodes in the training
         # 'self.replay_buffer_size' the number of quadruplets stored in the experience replay buffer
 
+
     def fn_load_strategy(self, strategy_file):
         pass
         # TO BE COMPLETED BY STUDENT
         # Here you can load the Q-network (to Q-network of self) from the strategy_file
 
     def fn_read_state(self):
-        print(self.gameboard.board)
-        pass
-        # TO BE COMPLETED BY STUDENT
-        # This function should be written by you
-        # Instructions:
-        # In this function you could calculate the current state of the gane board
-        # You can for example represent the state as a copy of the game board and the identifier of the current tile
-        # This function should not return a value, store the state as an attribute of self
+        board = self.gameboard.board
+        tile_type = self.gameboard.cur_tile_type
+        tile_orient = self.gameboard.tile_orientation
+
+        self.state_enc = self.state_encoder(board)
+        self.tile_enc = self.tile_encoder[tile_type, tile_orient]
 
         # Useful variables:
         # 'self.gameboard.N_row' number of rows in gameboard
@@ -342,3 +473,16 @@ class THumanAgent:
                             self.gameboard.tile_x+1, self.gameboard.tile_orientation)
                     if (event.key == pygame.K_DOWN) or (event.key == pygame.K_SPACE):
                         self.reward_tots[self.episode] += self.gameboard.fn_drop()
+
+
+class AgentTrainer:
+    def fn_init(self, gameboard):
+        self.gameboard = gameboard
+        self.samples = []
+
+    def fn_read_state(self):
+        ...
+
+    def fn_turn(self):
+        
+        self.samples.append(self.gameboard.board)
