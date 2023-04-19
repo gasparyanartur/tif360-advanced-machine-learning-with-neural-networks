@@ -15,6 +15,7 @@ import torch.nn.functional as F
 import copy
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+rng = np.random.default_rng(69420)
 
 class SmallStateAutoEncoder(nn.Module):
     def __init__(self, d_L, d_H) -> None:
@@ -115,13 +116,18 @@ class SmallTileEncoder:
             (3, 0): 8
         }
 
+        self._keys = list(self.encoding.keys())
+
     def encode_tile(self, tile_type, tile_orient, to_binary=True):
         enc = self.encoding[tile_type, tile_orient]
 
         if to_binary:
-            enc = self.to_binary[enc]
+            enc = self.binary[enc]
 
         return enc
+
+    def keys(self):
+        return self._keys
 
 class LargeTileEncoder:
     def __init__(self):
@@ -180,14 +186,19 @@ class LargeTileEncoder:
             (5, 3): 17,
             (6, 0): 18
         } 
+
+        self._keys = list(self.encoding.keys())
         
     def encode_tile(self, tile_type, tile_orient, to_binary=True):
         enc = self.encoding[tile_type, tile_orient]
 
         if to_binary:
-            enc = self.to_binary[enc]
+            enc = self.binary[enc]
 
         return enc
+
+    def keys(self):
+        return self._keys
 
 
 
@@ -211,13 +222,13 @@ def unpack_q_table(strategy_file):
 
 
 class QNetworkSmall(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, n_valid) -> None:
         super().__init__()
 
         self.linear = nn.Sequential(
             nn.Linear(36, 32),
             nn.ReLU(),
-            nn.Linear(32, 9),
+            nn.Linear(32, n_valid),
             nn.Softmax()
         )
 
@@ -226,7 +237,7 @@ class QNetworkSmall(nn.Module):
 
 
 class QNetworkLarge(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, n_valid) -> None:
         super().__init__()
 
         self.linear = nn.Sequential(
@@ -234,7 +245,7 @@ class QNetworkLarge(nn.Module):
             nn.ReLU(),
             nn.Linear(64, 64),
             nn.ReLU(),
-            nn.Linear(64, 19),
+            nn.Linear(64, n_valid),
             nn.Softmax(),
         )
 
@@ -313,8 +324,8 @@ class TQAgent:
             self.q_table[enc_state] = q_values
             self.actions[enc_state] = actions
 
-        self.i_prev_action = i_action = np.random.randint(len(actions)) \
-            if (np.random.rand() < self.epsilon) \
+        self.i_prev_action = i_action = rng.integers(len(actions)) \
+            if (rng.random() < self.epsilon) \
             else np.argmax(q_values)
         tile_x, tile_orientation = actions[i_action]
         self.gameboard.fn_move(tile_x, tile_orientation)
@@ -390,10 +401,25 @@ class TDQNAgent:
         self.avg_rewards = []
         self.moving_avg_size = moving_avg_size
 
+    def get_valid_actions(self, n_tile_types):
+        actions = []
+
+        for tile_type in range(n_tile_types):
+            curr_tile = self.gameboard.tiles[tile_type]
+            n_orientations = len(curr_tile)
+            for tile_orientation in range(n_orientations):
+                width = len(curr_tile[tile_orientation])
+                for tile_x in range(self.gameboard.N_col - width + 1):
+                    actions.append((tile_x, tile_orientation))
+
+        return actions
+
+
     def fn_init(self, gameboard, task_name=None, load_strategy=False, save_strategy=False, save_plot=False, show_plot=False):
         self.gameboard = gameboard
-        self.exp_buffer = np.zeros(self.replay_buffer_size)
+        self.exp_buffer = []
         self.reward_tots = np.zeros(self.episode_count)
+        self.n_exp = 0
 
         self.task_name = task_name
 
@@ -405,36 +431,46 @@ class TDQNAgent:
         self.is_large = self.gameboard.tile_size > 2
 
         if not self.is_large:
+            n_tile_types = 4
+            valid_actions = self.get_valid_actions(n_tile_types)
+            n_valid_actions = len(valid_actions)
             d_state = 32
-            n_tile = 19
             d_tile = 5
             ae = SmallStateAutoEncoder(d_state, 64)
             ae.load_state_dict(torch.load('./src/models/ae_small.pt'))
             tile_enc = SmallTileEncoder()
-            qnn = QNetworkSmall()
+            qnn = QNetworkSmall(n_valid_actions)
         else:
+            n_tile_types = 7
+            valid_actions = self.get_valid_actions(n_tile_types)
+            n_valid_actions = len(valid_actions)
             d_state = 32
-            n_tile = 9
             d_tile = 4
             ae = LargeStateAutoEncoder(d_state, 128)
             ae.load_state_dict(torch.load('./src/models/ae_large.pt'))
             tile_enc = LargeTileEncoder()
-            qnn = QNetworkLarge()
+            qnn = QNetworkLarge(n_valid_actions)
 
         ae.eval()
 
         self.d_state = d_state
         self.d_tile = d_tile
 
+        self.valid_actions = valid_actions
+        self.n_valid_actions = n_valid_actions
+
         self.board_encoder = ae.encoder
         self.board_encoder.eval()
 
         self.tile_encoder = tile_enc
-        self.qnn = qnn
-        self.qnn_target = copy.deepcopy(qnn)
+        self.qnn = qnn.to(device)
+        self.qnn_target = copy.deepcopy(qnn).to(device)
 
         self.qnn.eval()
         self.qnn_target.eval()
+
+        self.optim = torch.optim.Adam(self.qnn.parameters(), lr=self.alpha)
+        self.loss_fn = nn.MSELoss()
 
         #print(self.gameboard.board)
         # TO BE COMPLETED BY STUDENT
@@ -459,32 +495,28 @@ class TDQNAgent:
         # Here you can load the Q-network (to Q-network of self) from the strategy_file
 
     def encode_board(self, board):
-        board = self.gameboard.board
         board_enc = self.board_encoder(board)
         return board_enc
 
     def encode_tile(self, tile_type, tile_orient):
         tile_enc = self.tile_encoder.encode_tile(tile_type, tile_orient, to_binary=True)
-        return tile_enc
+        return tile_enc[None, :]
     
     def get_action(self, idx):
-        return self.tile_encoder.keys()[idx]
-
-    def get_n_action(self):
-        return len(self.tile_encoder.keys())
+        return self.valid_actions[idx]
 
     def get_random_action(self):
-        return np.random.choice(self.tile_encoder.keys())
+        return rng.choice(self.valid_actions)
 
     def fn_read_state(self):
-        board = self.gameboard.board
+        board = torch.tensor(self.gameboard.board)[None, None, ...]
         tile_type = self.gameboard.cur_tile_type
         tile_orient = self.gameboard.tile_orientation
 
         self.board_enc = self.encode_board(board)
         self.tile_enc = self.encode_tile(tile_type, tile_orient)
 
-        self.state_enc = torch.concat(self.board_enc, self.tile_enc)
+        self.state_enc = torch.concat((self.board_enc, self.tile_enc), axis=1)
 
         # Useful variables:
         # 'self.gameboard.N_row' number of rows in gameboard
@@ -493,9 +525,10 @@ class TDQNAgent:
         # 'self.gameboard.cur_tile_type' identifier of the current tile that should be placed on the game board (integer between 0 and len(self.gameboard.tiles))
 
     def fn_select_action(self):
+        self.qnn.eval()
         epsilon = max(self.epsilon, 1 - self.episode / self.epsilon_scale)
 
-        if np.random.rand() < epsilon:
+        if rng.random() < epsilon:
             action = self.get_random_action()
         else:
             state = self.state_enc.to(device)[None, :]
@@ -504,6 +537,7 @@ class TDQNAgent:
             action = self.get_action(i_action)
 
         self.action = action
+        self.gameboard.fn_move(*action)
 
 
         pass
@@ -526,7 +560,22 @@ class TDQNAgent:
 
     def fn_reinforce(self, batch):
 
-        state_prev, action_prev, reward_prev, state_prev = batch
+        self.qnn.train()
+        self.optim.zero_grad()
+
+        q = torch.zeros(len(batch))
+        y = torch.zeros(len(batch))
+
+        # TODO: vectorize
+        for i, (state_prev, action_prev, reward, state) in enumerate(batch):
+            q[i] = self.qnn(state_prev)[action_prev]
+            y[i] = reward + self.qnn_target(state).max()
+
+            
+        loss = self.loss_fn(q.to(device), y.to(device))
+        loss.backward()
+
+        self.optim.step()
 
 
         pass
@@ -558,6 +607,8 @@ class TDQNAgent:
                 raise SystemExit(0)
             else:
                 if (len(self.exp_buffer) >= self.replay_buffer_size) and ((self.episode % self.sync_target_episode_count) == 0):
+                    self.qnn.eval()
+                    self.qnn_target = copy.deepcopy(self.qnn).to(device)
                     pass
                     # TO BE COMPLETED BY STUDENT
                     # Here you should write line(s) to copy the current network to the target network
@@ -574,18 +625,20 @@ class TDQNAgent:
 
             # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to add the current reward to the total reward for the current episode, so you can save it to disk later
+            self.reward_tots[self.episode] = reward
 
             # Read the new state
             self.fn_read_state()
 
             # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to store the state in the experience replay buffer
-            # state_enc <N>, action_enc, reward <1> 
+            self.exp_buffer.append((self.state_prev, self.action, reward, self.state_enc))
 
 
             if len(self.exp_buffer) >= self.replay_buffer_size:
                 # TO BE COMPLETED BY STUDENT
                 # Here you should write line(s) to create a variable 'batch' containing 'self.batch_size' quadruplets
+                batch = rng.choice(self.exp_buffer, self.batch_size)
                 self.fn_reinforce(batch)
 
 
