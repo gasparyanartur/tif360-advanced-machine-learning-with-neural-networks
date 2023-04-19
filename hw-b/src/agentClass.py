@@ -11,6 +11,8 @@ from src.gameboardClass import TGameBoard
 import numpy as np
 import torch
 from torch import nn
+import torch.nn.functional as F
+import copy
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -81,6 +83,113 @@ class LargeStateAutoEncoder(nn.Module):
         return torch.tanh(x)
         
 
+class SmallTileEncoder:
+    def __init__(self):
+        self.binary = -1 + 2*torch.tensor([
+            [0, 0, 0, 0],
+            [0, 0, 0, 1],
+            [0, 0, 1, 0],
+            [0, 0, 1, 1],
+            [0, 1, 0, 0],
+            [0, 1, 0, 1],
+            [0, 1, 1, 0],
+            [0, 1, 1, 1],
+            [1, 0, 0, 0],
+            [1, 0, 0, 1],
+            [1, 0, 1, 0],
+            [1, 0, 1, 1],
+            [1, 1, 0, 0],
+            [1, 1, 0, 1],
+            [1, 1, 1, 0],
+            [1, 1, 1, 1],
+        ])
+        self.encoding = {
+            (0, 0): 0,
+            (0, 1): 1,
+            (1, 0): 2,
+            (1, 1): 3,
+            (2, 0): 4,
+            (2, 1): 5,
+            (2, 2): 6,
+            (2, 3): 7,
+            (3, 0): 8
+        }
+
+    def encode_tile(self, tile_type, tile_orient, to_binary=True):
+        enc = self.encoding[tile_type, tile_orient]
+
+        if to_binary:
+            enc = self.to_binary[enc]
+
+        return enc
+
+class LargeTileEncoder:
+    def __init__(self):
+        self.binary = -1 + 2*torch.tensor([
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 1],
+            [0, 0, 0, 1, 0],
+            [0, 0, 0, 1, 1],
+            [0, 0, 1, 0, 0],
+            [0, 0, 1, 0, 1],
+            [0, 0, 1, 1, 0],
+            [0, 0, 1, 1, 1],
+            [0, 1, 0, 0, 0],
+            [0, 1, 0, 0, 1],
+            [0, 1, 0, 1, 0],
+            [0, 1, 0, 1, 1],
+            [0, 1, 1, 0, 0],
+            [0, 1, 1, 0, 1],
+            [0, 1, 1, 1, 0],
+            [0, 1, 1, 1, 1],
+            [1, 0, 0, 0, 0],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 1, 0],
+            [1, 0, 0, 1, 1],
+            [1, 0, 1, 0, 0],
+            [1, 0, 1, 0, 1],
+            [1, 0, 1, 1, 0],
+            [1, 0, 1, 1, 1],
+            [1, 1, 0, 0, 0],
+            [1, 1, 0, 0, 1],
+            [1, 1, 0, 1, 0],
+            [1, 1, 0, 1, 1],
+            [1, 1, 1, 0, 0],
+            [1, 1, 1, 0, 1],
+            [1, 1, 1, 1, 0],
+            [1, 1, 1, 1, 1],
+        ])
+        self.encoding = {
+            (0, 0): 0,
+            (0, 1): 1,
+            (1, 0): 2,
+            (1, 1): 3,
+            (2, 0): 4,
+            (2, 1): 5,
+            (3, 0): 6,
+            (3, 1): 7,
+            (3, 2): 8,
+            (3, 3): 9,
+            (4, 0): 10,
+            (4, 1): 11,
+            (4, 2): 12,
+            (4, 3): 13,
+            (5, 0): 14,
+            (5, 1): 15,
+            (5, 2): 16,
+            (5, 3): 17,
+            (6, 0): 18
+        } 
+        
+    def encode_tile(self, tile_type, tile_orient, to_binary=True):
+        enc = self.encoding[tile_type, tile_orient]
+
+        if to_binary:
+            enc = self.to_binary[enc]
+
+        return enc
+
+
 
 def pack_q_table(q_table, actions):
     packed_data = {
@@ -105,18 +214,32 @@ class QNetworkSmall(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
-
-
         self.linear = nn.Sequential(
             nn.Linear(36, 32),
             nn.ReLU(),
-            nn.Linear(32, 17),
+            nn.Linear(32, 9),
             nn.Softmax()
         )
 
-    def forward(self, board, tile_id):
-        
+    def forward(self, state_enc):
+        return self.linear(state_enc)
 
+
+class QNetworkLarge(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.linear = nn.Sequential(
+            nn.Linear(37, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, 19),
+            nn.Softmax(),
+        )
+
+    def forward(self, state_enc):
+        return self.linear(state_enc)
 
 # This file provides the skeleton structure for the classes TQAgent and TDQNAgent to be completed by you, the student.
 # Locations starting with # TO BE COMPLETED BY STUDENT indicates missing code that should be written by you.
@@ -281,53 +404,37 @@ class TDQNAgent:
 
         self.is_large = self.gameboard.tile_size > 2
 
-        if self.is_large:
-            ae = SmallStateAutoEncoder(32, 64).to(device)
+        if not self.is_large:
+            d_state = 32
+            n_tile = 19
+            d_tile = 5
+            ae = SmallStateAutoEncoder(d_state, 64)
             ae.load_state_dict(torch.load('./src/models/ae_small.pt'))
+            tile_enc = SmallTileEncoder()
+            qnn = QNetworkSmall()
         else:
-            ae = LargeStateAutoEncoder(32, 128)
+            d_state = 32
+            n_tile = 9
+            d_tile = 4
+            ae = LargeStateAutoEncoder(d_state, 128)
             ae.load_state_dict(torch.load('./src/models/ae_large.pt'))
+            tile_enc = LargeTileEncoder()
+            qnn = QNetworkLarge()
+
         ae.eval()
 
-        self.state_encoder = ae.encoder
-        self.state_encoder.eval()
+        self.d_state = d_state
+        self.d_tile = d_tile
 
-        
-        if self.is_large:
-            self.tile_encoder = {
-                (0, 0): 0,
-                (0, 1): 1,
-                (1, 0): 2,
-                (1, 1): 3,
-                (2, 0): 4,
-                (2, 1): 5,
-                (3, 0): 6,
-                (3, 1): 7,
-                (3, 2): 8,
-                (3, 3): 9,
-                (4, 0): 10,
-                (4, 1): 11,
-                (4, 2): 12,
-                (4, 3): 13,
-                (5, 0): 14,
-                (5, 1): 15,
-                (5, 2): 16,
-                (5, 3): 17,
-                (6, 0): 18
-            }
-        else:
-            self.tile_encoder = {
-                (0, 0): 0,
-                (0, 1): 1,
-                (1, 0): 2,
-                (1, 1): 3,
-                (2, 0): 4,
-                (2, 1): 5,
-                (2, 2): 6,
-                (2, 3): 7,
-                (3, 0): 8
-            }
+        self.board_encoder = ae.encoder
+        self.board_encoder.eval()
 
+        self.tile_encoder = tile_enc
+        self.qnn = qnn
+        self.qnn_target = copy.deepcopy(qnn)
+
+        self.qnn.eval()
+        self.qnn_target.eval()
 
         #print(self.gameboard.board)
         # TO BE COMPLETED BY STUDENT
@@ -346,19 +453,38 @@ class TDQNAgent:
         # 'self.episode_count' the total number of episodes in the training
         # 'self.replay_buffer_size' the number of quadruplets stored in the experience replay buffer
 
-
     def fn_load_strategy(self, strategy_file):
         pass
         # TO BE COMPLETED BY STUDENT
         # Here you can load the Q-network (to Q-network of self) from the strategy_file
+
+    def encode_board(self, board):
+        board = self.gameboard.board
+        board_enc = self.board_encoder(board)
+        return board_enc
+
+    def encode_tile(self, tile_type, tile_orient):
+        tile_enc = self.tile_encoder.encode_tile(tile_type, tile_orient, to_binary=True)
+        return tile_enc
+    
+    def get_action(self, idx):
+        return self.tile_encoder.keys()[idx]
+
+    def get_n_action(self):
+        return len(self.tile_encoder.keys())
+
+    def get_random_action(self):
+        return np.random.choice(self.tile_encoder.keys())
 
     def fn_read_state(self):
         board = self.gameboard.board
         tile_type = self.gameboard.cur_tile_type
         tile_orient = self.gameboard.tile_orientation
 
-        self.state_enc = self.state_encoder(board)
-        self.tile_enc = self.tile_encoder[tile_type, tile_orient]
+        self.board_enc = self.encode_board(board)
+        self.tile_enc = self.encode_tile(tile_type, tile_orient)
+
+        self.state_enc = torch.concat(self.board_enc, self.tile_enc)
 
         # Useful variables:
         # 'self.gameboard.N_row' number of rows in gameboard
@@ -367,6 +493,19 @@ class TDQNAgent:
         # 'self.gameboard.cur_tile_type' identifier of the current tile that should be placed on the game board (integer between 0 and len(self.gameboard.tiles))
 
     def fn_select_action(self):
+        epsilon = max(self.epsilon, 1 - self.episode / self.epsilon_scale)
+
+        if np.random.rand() < epsilon:
+            action = self.get_random_action()
+        else:
+            state = self.state_enc.to(device)[None, :]
+            qs = self.qnn(state)
+            i_action = torch.argmax(qs)
+            action = self.get_action(i_action)
+
+        self.action = action
+
+
         pass
         # TO BE COMPLETED BY STUDENT
         # This function should be written by you
@@ -386,6 +525,10 @@ class TDQNAgent:
         # You can use this function to map out which actions are valid or not
 
     def fn_reinforce(self, batch):
+
+        state_prev, action_prev, reward_prev, state_prev = batch
+
+
         pass
         # TO BE COMPLETED BY STUDENT
         # This function should be written by you
@@ -424,6 +567,7 @@ class TDQNAgent:
             self.fn_select_action()
             # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to copy the old state into the variable 'old_state' which is later stored in the ecperience replay buffer
+            self.state_prev = self.state_enc
 
             # Drop the tile on the game board
             reward = self.gameboard.fn_drop()
@@ -436,6 +580,8 @@ class TDQNAgent:
 
             # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to store the state in the experience replay buffer
+            # state_enc <N>, action_enc, reward <1> 
+
 
             if len(self.exp_buffer) >= self.replay_buffer_size:
                 # TO BE COMPLETED BY STUDENT
@@ -474,15 +620,3 @@ class THumanAgent:
                     if (event.key == pygame.K_DOWN) or (event.key == pygame.K_SPACE):
                         self.reward_tots[self.episode] += self.gameboard.fn_drop()
 
-
-class AgentTrainer:
-    def fn_init(self, gameboard):
-        self.gameboard = gameboard
-        self.samples = []
-
-    def fn_read_state(self):
-        ...
-
-    def fn_turn(self):
-        
-        self.samples.append(self.gameboard.board)
