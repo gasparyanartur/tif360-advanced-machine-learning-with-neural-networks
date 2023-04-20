@@ -403,16 +403,21 @@ class TDQNAgent:
 
     def get_valid_actions(self, n_tile_types):
         actions = []
+        n_valid_actions = []
 
         for tile_type in range(n_tile_types):
             curr_tile = self.gameboard.tiles[tile_type]
             n_orientations = len(curr_tile)
+            tile_actions = []
             for tile_orientation in range(n_orientations):
                 width = len(curr_tile[tile_orientation])
                 for tile_x in range(self.gameboard.N_col - width + 1):
-                    actions.append((tile_x, tile_orientation))
+                    tile_actions.append((tile_x, tile_orientation))
 
-        return actions
+            n_valid_actions.append(len(tile_actions))
+            actions.append(tile_actions)
+
+        return actions, n_valid_actions
 
 
     def fn_init(self, gameboard, task_name=None, load_strategy=False, save_strategy=False, save_plot=False, show_plot=False):
@@ -432,14 +437,13 @@ class TDQNAgent:
 
         if not self.is_large:
             n_tile_types = 4
-            valid_actions = self.get_valid_actions(n_tile_types)
-            n_valid_actions = len(valid_actions)
+            valid_actions, n_valid_actions = self.get_valid_actions(n_tile_types)
             d_state = 32
             d_tile = 5
             ae = SmallStateAutoEncoder(d_state, 64)
             ae.load_state_dict(torch.load('./src/models/ae_small.pt'))
             tile_enc = SmallTileEncoder()
-            qnn = QNetworkSmall(n_valid_actions)
+            qnn = QNetworkSmall(max(n_valid_actions))
         else:
             n_tile_types = 7
             valid_actions = self.get_valid_actions(n_tile_types)
@@ -449,7 +453,7 @@ class TDQNAgent:
             ae = LargeStateAutoEncoder(d_state, 128)
             ae.load_state_dict(torch.load('./src/models/ae_large.pt'))
             tile_enc = LargeTileEncoder()
-            qnn = QNetworkLarge(n_valid_actions)
+            qnn = QNetworkLarge(max(n_valid_actions))
 
         ae.eval()
 
@@ -503,10 +507,10 @@ class TDQNAgent:
         return tile_enc[None, :]
     
     def get_action(self, idx):
-        return self.valid_actions[idx]
+        return self.valid_actions[self.gameboard.cur_tile_type][idx]
 
     def get_random_action(self):
-        return rng.choice(self.valid_actions)
+        return rng.choice(self.valid_actions[self.gameboard.cur_tile_type])
 
     def fn_read_state(self):
         board = torch.tensor(self.gameboard.board)[None, None, ...]
@@ -529,15 +533,15 @@ class TDQNAgent:
         epsilon = max(self.epsilon, 1 - self.episode / self.epsilon_scale)
 
         if rng.random() < epsilon:
-            action = self.get_random_action()
+            i_action = rng.integers(self.n_valid_actions[self.gameboard.curr_tile_type])
         else:
             state = self.state_enc.to(device)[None, :]
             qs = self.qnn(state)
             i_action = torch.argmax(qs)
-            action = self.get_action(i_action)
+            # TODO: Handle case if greater than length of valid actions
 
-        self.action = action
-        self.gameboard.fn_move(*action)
+        self.action = self.get_action(i_action)
+        self.gameboard.fn_move(*self.action)
 
 
         pass
