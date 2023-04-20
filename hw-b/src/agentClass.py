@@ -14,7 +14,8 @@ from torch import nn
 import torch.nn.functional as F
 import copy
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cpu')
 rng = np.random.default_rng(69420)
 
 class SmallStateAutoEncoder(nn.Module):
@@ -222,14 +223,15 @@ def unpack_q_table(strategy_file):
 
 
 class QNetworkSmall(nn.Module):
-    def __init__(self, n_valid) -> None:
+    def __init__(self, n_valid, d_state=36, d_hidden=64) -> None:
         super().__init__()
 
         self.linear = nn.Sequential(
-            nn.Linear(36, 32),
+            nn.Linear(d_state, d_hidden),
             nn.ReLU(),
-            nn.Linear(32, n_valid),
-            nn.Softmax()
+            nn.Linear(d_hidden, d_hidden),
+            nn.ReLU(),
+            nn.Linear(d_hidden, n_valid),
         )
 
     def forward(self, state_enc):
@@ -237,16 +239,15 @@ class QNetworkSmall(nn.Module):
 
 
 class QNetworkLarge(nn.Module):
-    def __init__(self, n_valid) -> None:
+    def __init__(self, n_valid, d_state=37) -> None:
         super().__init__()
 
         self.linear = nn.Sequential(
-            nn.Linear(37, 64),
+            nn.Linear(d_state, 64),
             nn.ReLU(),
             nn.Linear(64, 64),
             nn.ReLU(),
             nn.Linear(64, n_valid),
-            nn.Softmax(),
         )
 
     def forward(self, state_enc):
@@ -423,8 +424,10 @@ class TDQNAgent:
     def fn_init(self, gameboard, task_name=None, load_strategy=False, save_strategy=False, save_plot=False, show_plot=False):
         self.gameboard = gameboard
         self.exp_buffer = []
+        self.episode_reward = 0
         self.reward_tots = np.zeros(self.episode_count)
         self.n_exp = 0
+        self.turn = 0
 
         self.task_name = task_name
 
@@ -509,9 +512,6 @@ class TDQNAgent:
     def get_action(self, idx):
         return self.valid_actions[self.gameboard.cur_tile_type][idx]
 
-    def get_random_action(self):
-        return rng.choice(self.valid_actions[self.gameboard.cur_tile_type])
-
     def fn_read_state(self):
         board = torch.tensor(self.gameboard.board)[None, None, ...]
         tile_type = self.gameboard.cur_tile_type
@@ -531,15 +531,16 @@ class TDQNAgent:
     def fn_select_action(self):
         self.qnn.eval()
         epsilon = max(self.epsilon, 1 - self.episode / self.epsilon_scale)
+        n_valid = self.n_valid_actions[self.gameboard.cur_tile_type]
 
         if rng.random() < epsilon:
-            i_action = rng.integers(self.n_valid_actions[self.gameboard.curr_tile_type])
+            i_action = rng.integers(n_valid)
         else:
             state = self.state_enc.to(device)[None, :]
-            qs = self.qnn(state)
+            qs = self.qnn(state)[..., :n_valid]
             i_action = torch.argmax(qs)
-            # TODO: Handle case if greater than length of valid actions
 
+        self.i_action = i_action
         self.action = self.get_action(i_action)
         self.gameboard.fn_move(*self.action)
 
@@ -571,13 +572,19 @@ class TDQNAgent:
         y = torch.zeros(len(batch))
 
         # TODO: vectorize
-        for i, (state_prev, action_prev, reward, state) in enumerate(batch):
-            q[i] = self.qnn(state_prev)[action_prev]
-            y[i] = reward + self.qnn_target(state).max()
+        for i, (state_prev, i_action_prev, reward, state) in enumerate(batch):
+            state_prev = state_prev.to(device)
+            state = state.to(device)
+            qp = self.qnn(state_prev)[0]
+            qt = self.qnn_target(state)[0]
+            #q[i] = self.qnn(state_prev.to(device))[action_prev]
+            q[i] = qp[i_action_prev]
+            #y[i] = reward + self.qnn_target(state.to(device))[0].max()
+            y[i] = qt.max() + reward
 
             
         loss = self.loss_fn(q.to(device), y.to(device))
-        loss.backward()
+        loss.backward(retain_graph=True)
 
         self.optim.step()
 
@@ -596,10 +603,14 @@ class TDQNAgent:
 
     def fn_turn(self):
         if self.gameboard.gameover:
+            self.reward_tots[self.episode] = self.episode_reward
             self.episode += 1
+            self.episode_reward = 0
+
             if self.episode % 100 == 0:
                 print('episode '+str(self.episode)+'/'+str(self.episode_count)+' (reward: ',
                       str(np.sum(self.reward_tots[range(self.episode-100, self.episode)])), ')')
+
             if self.episode % 1000 == 0:
                 saveEpisodes = [1000, 2000, 5000, 10000, 20000,
                                 50000, 100000, 200000, 500000, 1000000]
@@ -607,8 +618,10 @@ class TDQNAgent:
                     pass
                     # TO BE COMPLETED BY STUDENT
                     # Here you can save the rewards and the Q-network to data files
+
             if self.episode >= self.episode_count:
                 raise SystemExit(0)
+
             else:
                 if (len(self.exp_buffer) >= self.replay_buffer_size) and ((self.episode % self.sync_target_episode_count) == 0):
                     self.qnn.eval()
@@ -629,22 +642,31 @@ class TDQNAgent:
 
             # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to add the current reward to the total reward for the current episode, so you can save it to disk later
-            self.reward_tots[self.episode] = reward
+            self.episode_reward += reward
 
             # Read the new state
             self.fn_read_state()
 
             # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to store the state in the experience replay buffer
-            self.exp_buffer.append((self.state_prev, self.action, reward, self.state_enc))
+            self.exp_buffer.append((self.state_prev, self.i_action, reward, self.state_enc))
 
 
             if len(self.exp_buffer) >= self.replay_buffer_size:
                 # TO BE COMPLETED BY STUDENT
                 # Here you should write line(s) to create a variable 'batch' containing 'self.batch_size' quadruplets
-                batch = rng.choice(self.exp_buffer, self.batch_size)
+                batch = [self.exp_buffer[i] for i in rng.integers(0, len(self.exp_buffer), (self.batch_size,))]
+                #i_batch = torch.randint(0, len(self.exp_buffer), (self.batch_size,))
+                
+                #batch = rng.choice(self.exp_buffer, self.batch_size)
+                #print(type(self.exp_buffer))
+                #print(len(self.exp_buffer))
+                #batch = self.exp_buffer[i_batch]
+                #self.fn_reinforce(torch.tensor(batch))
                 self.fn_reinforce(batch)
+                self.exp_buffer.pop(0)
 
+            self.turn += 1
 
 class THumanAgent:
     def fn_init(self, gameboard):
