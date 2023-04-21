@@ -14,8 +14,8 @@ from torch import nn
 import torch.nn.functional as F
 import copy
 
-#device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-device = torch.device('cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#device = torch.device('cpu')
 rng = np.random.default_rng(69420)
 
 class SmallStateAutoEncoder(nn.Module):
@@ -231,6 +231,10 @@ class QNetworkSmall(nn.Module):
             nn.ReLU(),
             nn.Linear(d_hidden, d_hidden),
             nn.ReLU(),
+            nn.Linear(d_hidden, d_hidden),
+            nn.ReLU(),
+            nn.Linear(d_hidden, d_hidden),
+            nn.ReLU(),
             nn.Linear(d_hidden, n_valid),
         )
 
@@ -429,8 +433,12 @@ class TDQNAgent:
         self.n_exp = 0
         self.turn = 0
 
-        self.task_name = task_name
+        self.buf_prev_states = []
+        self.buf_actions = []
+        self.buf_rewards = []
+        self.buf_states = []
 
+        self.task_name = task_name
         self.load_strategy = load_strategy
         self.save_strategy = save_strategy
         self.save_plot = save_plot
@@ -446,7 +454,7 @@ class TDQNAgent:
             ae = SmallStateAutoEncoder(d_state, 64)
             ae.load_state_dict(torch.load('./src/models/ae_small.pt'))
             tile_enc = SmallTileEncoder()
-            qnn = QNetworkSmall(max(n_valid_actions))
+            qnn = QNetworkSmall(max(n_valid_actions), d_hidden=256)
         else:
             n_tile_types = 7
             valid_actions = self.get_valid_actions(n_tile_types)
@@ -458,7 +466,7 @@ class TDQNAgent:
             tile_enc = LargeTileEncoder()
             qnn = QNetworkLarge(max(n_valid_actions))
 
-        ae.eval()
+        #ae.eval()
 
         self.d_state = d_state
         self.d_tile = d_tile
@@ -503,11 +511,11 @@ class TDQNAgent:
 
     def encode_board(self, board):
         board_enc = self.board_encoder(board)
-        return board_enc
+        return board_enc[0]
 
     def encode_tile(self, tile_type, tile_orient):
         tile_enc = self.tile_encoder.encode_tile(tile_type, tile_orient, to_binary=True)
-        return tile_enc[None, :]
+        return tile_enc
     
     def get_action(self, idx):
         return self.valid_actions[self.gameboard.cur_tile_type][idx]
@@ -520,7 +528,7 @@ class TDQNAgent:
         self.board_enc = self.encode_board(board)
         self.tile_enc = self.encode_tile(tile_type, tile_orient)
 
-        self.state_enc = torch.concat((self.board_enc, self.tile_enc), axis=1)
+        self.state_enc = torch.concat((self.board_enc, self.tile_enc))
 
         # Useful variables:
         # 'self.gameboard.N_row' number of rows in gameboard
@@ -536,8 +544,8 @@ class TDQNAgent:
         if rng.random() < epsilon:
             i_action = rng.integers(n_valid)
         else:
-            state = self.state_enc.to(device)[None, :]
-            qs = self.qnn(state)[..., :n_valid]
+            state = self.state_enc.to(device)
+            qs = self.qnn(state)[:n_valid]
             i_action = torch.argmax(qs)
 
         self.i_action = i_action
@@ -564,28 +572,20 @@ class TDQNAgent:
         # You can use this function to map out which actions are valid or not
 
     def fn_reinforce(self, batch):
-
         self.qnn.train()
         self.optim.zero_grad()
 
-        q = torch.zeros(len(batch))
-        y = torch.zeros(len(batch))
+        prev_states, actions, rewards, states = batch
 
-        # TODO: vectorize
-        for i, (state_prev, i_action_prev, reward, state) in enumerate(batch):
-            state_prev = state_prev.to(device)
-            state = state.to(device)
-            qp = self.qnn(state_prev)[0]
-            qt = self.qnn_target(state)[0]
-            #q[i] = self.qnn(state_prev.to(device))[action_prev]
-            q[i] = qp[i_action_prev]
-            #y[i] = reward + self.qnn_target(state.to(device))[0].max()
-            y[i] = qt.max() + reward
+        qp = self.qnn(prev_states.to(device))
+        qt = self.qnn_target(states.to(device))
+        q = qp[range(self.batch_size), actions.flatten()]
+        y = rewards.flatten() + torch.max(qt, dim=-1).values
 
-            
-        loss = self.loss_fn(q.to(device), y.to(device))
+        loss = self.loss_fn(q, y)
         loss.backward(retain_graph=True)
 
+        torch.nn.utils.clip_grad_norm_(self.qnn.parameters(), max_norm=10, norm_type=2.0)
         self.optim.step()
 
 
@@ -603,6 +603,9 @@ class TDQNAgent:
 
     def fn_turn(self):
         if self.gameboard.gameover:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             self.reward_tots[self.episode] = self.episode_reward
             self.episode += 1
             self.episode_reward = 0
@@ -623,7 +626,7 @@ class TDQNAgent:
                 raise SystemExit(0)
 
             else:
-                if (len(self.exp_buffer) >= self.replay_buffer_size) and ((self.episode % self.sync_target_episode_count) == 0):
+                if (self.n_exp >= self.replay_buffer_size) and ((self.episode % self.sync_target_episode_count) == 0):
                     self.qnn.eval()
                     self.qnn_target = copy.deepcopy(self.qnn).to(device)
                     pass
@@ -649,22 +652,50 @@ class TDQNAgent:
 
             # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to store the state in the experience replay buffer
-            self.exp_buffer.append((self.state_prev, self.i_action, reward, self.state_enc))
+            t_action = torch.tensor([self.i_action])
+            t_reward = torch.tensor([reward])
+            #sample = torch.hstack((self.state_prev, t_action, t_reward, self.state_enc))
+            #self.exp_buffer.append((self.state_prev, self.i_action, reward, self.state_enc))
 
+            self.buf_prev_states.append(self.state_prev)
+            self.buf_actions.append(t_action)
+            self.buf_rewards.append(t_reward)
+            self.buf_states.append(self.state_enc)
 
-            if len(self.exp_buffer) >= self.replay_buffer_size:
+            self.n_exp += 1
+
+            if self.n_exp >= self.replay_buffer_size:
                 # TO BE COMPLETED BY STUDENT
                 # Here you should write line(s) to create a variable 'batch' containing 'self.batch_size' quadruplets
-                batch = [self.exp_buffer[i] for i in rng.integers(0, len(self.exp_buffer), (self.batch_size,))]
-                #i_batch = torch.randint(0, len(self.exp_buffer), (self.batch_size,))
-                
-                #batch = rng.choice(self.exp_buffer, self.batch_size)
-                #print(type(self.exp_buffer))
-                #print(len(self.exp_buffer))
-                #batch = self.exp_buffer[i_batch]
-                #self.fn_reinforce(torch.tensor(batch))
+
+                self.buf_prev_states.append(self.state_prev)
+                self.buf_prev_states.pop(0)
+                self.buf_actions.append(t_action)
+                self.buf_actions.pop(0)
+                self.buf_rewards.append(t_reward)
+                self.buf_rewards.pop(0)
+                self.buf_states.append(self.state_enc)
+                self.buf_states.pop(0)
+
+                batch_prev_states = []
+                batch_actions = []
+                batch_rewards = []
+                batch_states = []
+
+                for _ in range(self.batch_size):
+                    i = rng.integers(self.replay_buffer_size)
+                    batch_prev_states.append(self.buf_prev_states[i])
+                    batch_actions.append(self.buf_actions[i])
+                    batch_rewards.append(self.buf_rewards[i])
+                    batch_states.append(self.buf_states[i])
+
+                prev_states = torch.stack(batch_prev_states).to(device)
+                actions = torch.stack(batch_actions).to(device)
+                rewards = torch.stack(batch_rewards).to(device)
+                states = torch.stack(batch_states).to(device)
+
+                batch = (prev_states, actions, rewards, states)
                 self.fn_reinforce(batch)
-                self.exp_buffer.pop(0)
 
             self.turn += 1
 
