@@ -434,15 +434,12 @@ class TDQNAgent:
     def fn_select_action(self):
         self.qnn.eval()
         epsilon = max(self.epsilon, 1 - self.episode / self.epsilon_scale)
-        n_valid = self.n_valid_actions[self.gameboard.cur_tile_type]
 
         if rng.random() < epsilon:
-            #i_action = rng.integers(n_valid)
             i_action = rng.integers(self.n_actions)
         else:
             state = self.state_enc
             qs = self.qnn(state)
-            #qs = self.qnn(state)[:n_valid]
             i_action = torch.argmax(qs)
 
         self.i_action = i_action
@@ -471,6 +468,7 @@ class TDQNAgent:
     def fn_reinforce(self, batch):
         self.qnn.train()
         self.qnn_target.eval()
+        self.optim.zero_grad()
 
         prev_states, actions, rewards, states, terminals = batch
 
@@ -480,10 +478,7 @@ class TDQNAgent:
         y = rewards + (terminals==0) * (torch.max(qt, dim=-1).values)
 
         loss = self.loss_fn(q, y)
-        self.optim.zero_grad()
         loss.backward()
-
-        torch.nn.utils.clip_grad_norm_(self.qnn.parameters(), max_norm=10, norm_type=2.0)
         self.optim.step()
 
 
