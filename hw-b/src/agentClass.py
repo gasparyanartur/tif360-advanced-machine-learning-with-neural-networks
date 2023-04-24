@@ -14,8 +14,6 @@ from torch import nn
 import torch.nn.functional as F
 import copy
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-#device = torch.device('cpu')
 rng = np.random.default_rng(69420)
 
 class SmallStateAutoEncoder(nn.Module):
@@ -231,10 +229,6 @@ class QNetworkSmall(nn.Module):
             nn.ReLU(),
             nn.Linear(d_hidden, d_hidden),
             nn.ReLU(),
-            nn.Linear(d_hidden, d_hidden),
-            nn.ReLU(),
-            nn.Linear(d_hidden, d_hidden),
-            nn.ReLU(),
             nn.Linear(d_hidden, n_valid),
         )
 
@@ -437,6 +431,7 @@ class TDQNAgent:
         self.buf_actions = []
         self.buf_rewards = []
         self.buf_states = []
+        self.buf_terminals = []
 
         self.task_name = task_name
         self.load_strategy = load_strategy
@@ -454,7 +449,7 @@ class TDQNAgent:
             ae = SmallStateAutoEncoder(d_state, 64)
             ae.load_state_dict(torch.load('./src/models/ae_small.pt'))
             tile_enc = SmallTileEncoder()
-            qnn = QNetworkSmall(max(n_valid_actions), d_hidden=256)
+            qnn = QNetworkSmall(max(n_valid_actions), d_hidden=128)
         else:
             n_tile_types = 7
             valid_actions = self.get_valid_actions(n_tile_types)
@@ -478,8 +473,8 @@ class TDQNAgent:
         self.board_encoder.eval()
 
         self.tile_encoder = tile_enc
-        self.qnn = qnn.to(device)
-        self.qnn_target = copy.deepcopy(qnn).to(device)
+        self.qnn = qnn
+        self.qnn_target = copy.deepcopy(qnn)
 
         self.qnn.eval()
         self.qnn_target.eval()
@@ -544,7 +539,7 @@ class TDQNAgent:
         if rng.random() < epsilon:
             i_action = rng.integers(n_valid)
         else:
-            state = self.state_enc.to(device)
+            state = self.state_enc
             qs = self.qnn(state)[:n_valid]
             i_action = torch.argmax(qs)
 
@@ -575,17 +570,17 @@ class TDQNAgent:
         self.qnn.train()
         self.optim.zero_grad()
 
-        prev_states, actions, rewards, states = batch
+        prev_states, actions, rewards, states, terminals = batch
 
-        qp = self.qnn(prev_states.to(device))
-        qt = self.qnn_target(states.to(device))
+        qp = self.qnn(prev_states)
+        qt = self.qnn_target(states)
         q = qp[range(self.batch_size), actions.flatten()]
-        y = rewards.flatten() + torch.max(qt, dim=-1).values
+        y = rewards.flatten() + terminals.flatten() * (torch.max(qt, dim=-1).values)
 
         loss = self.loss_fn(q, y)
         loss.backward(retain_graph=True)
 
-        torch.nn.utils.clip_grad_norm_(self.qnn.parameters(), max_norm=10, norm_type=2.0)
+        #torch.nn.utils.clip_grad_norm_(self.qnn.parameters(), max_norm=10, norm_type=2.0)
         self.optim.step()
 
 
@@ -628,7 +623,7 @@ class TDQNAgent:
             else:
                 if (self.n_exp >= self.replay_buffer_size) and ((self.episode % self.sync_target_episode_count) == 0):
                     self.qnn.eval()
-                    self.qnn_target = copy.deepcopy(self.qnn).to(device)
+                    self.qnn_target = copy.deepcopy(self.qnn)
                     pass
                     # TO BE COMPLETED BY STUDENT
                     # Here you should write line(s) to copy the current network to the target network
@@ -671,17 +666,11 @@ class TDQNAgent:
                 # TO BE COMPLETED BY STUDENT
                 # Here you should write line(s) to create a variable 'batch' containing 'self.batch_size' quadruplets
 
-                self.buf_prev_states.pop(0)
-                self.buf_actions.pop(0)
-                self.buf_rewards.pop(0)
-                self.buf_states.pop(0)
-                self.buf_terminals.pop(0)
-
                 batch_prev_states = []
                 batch_actions = []
                 batch_rewards = []
                 batch_states = []
-                batch_terminal = []
+                batch_terminals = []
 
                 for _ in range(self.batch_size):
                     i = rng.integers(self.replay_buffer_size)
@@ -689,14 +678,22 @@ class TDQNAgent:
                     batch_actions.append(self.buf_actions[i])
                     batch_rewards.append(self.buf_rewards[i])
                     batch_states.append(self.buf_states[i])
+                    batch_terminals.append(self.buf_terminals[i])
 
-                prev_states = torch.stack(batch_prev_states).to(device)
-                actions = torch.stack(batch_actions).to(device)
-                rewards = torch.stack(batch_rewards).to(device)
-                states = torch.stack(batch_states).to(device)
+                prev_states = torch.stack(batch_prev_states)
+                actions = torch.stack(batch_actions)
+                rewards = torch.stack(batch_rewards)
+                states = torch.stack(batch_states)
+                terminals = torch.stack(batch_terminals)
 
-                batch = (prev_states, actions, rewards, states)
+                batch = (prev_states, actions, rewards, states, terminals)
                 self.fn_reinforce(batch)
+
+                self.buf_prev_states.pop(0)
+                self.buf_actions.pop(0)
+                self.buf_rewards.pop(0)
+                self.buf_states.pop(0)
+                self.buf_terminals.pop(0)
 
             self.turn += 1
 
