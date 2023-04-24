@@ -83,122 +83,15 @@ class LargeStateAutoEncoder(nn.Module):
         return torch.tanh(x)
         
 
-class SmallTileEncoder:
-    def __init__(self):
-        self.binary = -1 + 2*torch.tensor([
-            [0, 0, 0, 0],
-            [0, 0, 0, 1],
-            [0, 0, 1, 0],
-            [0, 0, 1, 1],
-            [0, 1, 0, 0],
-            [0, 1, 0, 1],
-            [0, 1, 1, 0],
-            [0, 1, 1, 1],
-            [1, 0, 0, 0],
-            [1, 0, 0, 1],
-            [1, 0, 1, 0],
-            [1, 0, 1, 1],
-            [1, 1, 0, 0],
-            [1, 1, 0, 1],
-            [1, 1, 1, 0],
-            [1, 1, 1, 1],
-        ])
-        self.encoding = {
-            (0, 0): 0,
-            (0, 1): 1,
-            (1, 0): 2,
-            (1, 1): 3,
-            (2, 0): 4,
-            (2, 1): 5,
-            (2, 2): 6,
-            (2, 3): 7,
-            (3, 0): 8
-        }
+class TileEncoder:
+    def __init__(self, d_enc):
+        self.d_enc = d_enc
+        self.values = -1 + torch.ones(d_enc, d_enc)
+        for i in range(d_enc):
+            self.values[i, i] = 1
 
-        self._keys = list(self.encoding.keys())
-
-    def encode_tile(self, tile_type, tile_orient, to_binary=True):
-        enc = self.encoding[tile_type, tile_orient]
-
-        if to_binary:
-            enc = self.binary[enc]
-
-        return enc
-
-    def keys(self):
-        return self._keys
-
-class LargeTileEncoder:
-    def __init__(self):
-        self.binary = -1 + 2*torch.tensor([
-            [0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1],
-            [0, 0, 0, 1, 0],
-            [0, 0, 0, 1, 1],
-            [0, 0, 1, 0, 0],
-            [0, 0, 1, 0, 1],
-            [0, 0, 1, 1, 0],
-            [0, 0, 1, 1, 1],
-            [0, 1, 0, 0, 0],
-            [0, 1, 0, 0, 1],
-            [0, 1, 0, 1, 0],
-            [0, 1, 0, 1, 1],
-            [0, 1, 1, 0, 0],
-            [0, 1, 1, 0, 1],
-            [0, 1, 1, 1, 0],
-            [0, 1, 1, 1, 1],
-            [1, 0, 0, 0, 0],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 1, 0],
-            [1, 0, 0, 1, 1],
-            [1, 0, 1, 0, 0],
-            [1, 0, 1, 0, 1],
-            [1, 0, 1, 1, 0],
-            [1, 0, 1, 1, 1],
-            [1, 1, 0, 0, 0],
-            [1, 1, 0, 0, 1],
-            [1, 1, 0, 1, 0],
-            [1, 1, 0, 1, 1],
-            [1, 1, 1, 0, 0],
-            [1, 1, 1, 0, 1],
-            [1, 1, 1, 1, 0],
-            [1, 1, 1, 1, 1],
-        ])
-        self.encoding = {
-            (0, 0): 0,
-            (0, 1): 1,
-            (1, 0): 2,
-            (1, 1): 3,
-            (2, 0): 4,
-            (2, 1): 5,
-            (3, 0): 6,
-            (3, 1): 7,
-            (3, 2): 8,
-            (3, 3): 9,
-            (4, 0): 10,
-            (4, 1): 11,
-            (4, 2): 12,
-            (4, 3): 13,
-            (5, 0): 14,
-            (5, 1): 15,
-            (5, 2): 16,
-            (5, 3): 17,
-            (6, 0): 18
-        } 
-
-        self._keys = list(self.encoding.keys())
-        
-    def encode_tile(self, tile_type, tile_orient, to_binary=True):
-        enc = self.encoding[tile_type, tile_orient]
-
-        if to_binary:
-            enc = self.binary[enc]
-
-        return enc
-
-    def keys(self):
-        return self._keys
-
+    def encode_tile(self, tile_type):
+        return self.values[tile_type]
 
 
 def pack_q_table(q_table, actions):
@@ -221,7 +114,7 @@ def unpack_q_table(strategy_file):
 
 
 class QNetworkSmall(nn.Module):
-    def __init__(self, n_valid, d_state=36, d_hidden=64) -> None:
+    def __init__(self, n_valid, d_state=20, d_hidden=64) -> None:
         super().__init__()
 
         self.linear = nn.Sequential(
@@ -234,6 +127,10 @@ class QNetworkSmall(nn.Module):
 
     def forward(self, state_enc):
         return self.linear(state_enc)
+
+class QNetworkFlatten(nn.Module):
+    def forward(self, x):
+        return nn.Flatten(1)(x)
 
 
 class QNetworkLarge(nn.Module):
@@ -400,7 +297,7 @@ class TDQNAgent:
         self.avg_rewards = []
         self.moving_avg_size = moving_avg_size
 
-    def get_valid_actions(self, n_tile_types):
+    def get_valid_actions(self, n_tile_types, check_bounds=True):
         actions = []
         n_valid_actions = []
 
@@ -410,8 +307,9 @@ class TDQNAgent:
             tile_actions = []
             for tile_orientation in range(n_orientations):
                 width = len(curr_tile[tile_orientation])
-                for tile_x in range(self.gameboard.N_col - width + 1):
-                    tile_actions.append((tile_x, tile_orientation))
+                for tile_x in range(self.gameboard.N_col):
+                    if (not check_bounds) or (tile_x <= self.gameboard.N_col - width):
+                        tile_actions.append((tile_x, tile_orientation))
 
             n_valid_actions.append(len(tile_actions))
             actions.append(tile_actions)
@@ -425,7 +323,6 @@ class TDQNAgent:
         self.episode_reward = 0
         self.reward_tots = np.zeros(self.episode_count)
         self.n_exp = 0
-        self.turn = 0
 
         self.buf_prev_states = []
         self.buf_actions = []
@@ -442,26 +339,28 @@ class TDQNAgent:
         self.is_large = self.gameboard.tile_size > 2
 
         if not self.is_large:
-            n_tile_types = 4
-            valid_actions, n_valid_actions = self.get_valid_actions(n_tile_types)
-            d_state = 32
-            d_tile = 5
-            ae = SmallStateAutoEncoder(d_state, 64)
-            ae.load_state_dict(torch.load('./src/models/ae_small.pt'))
-            tile_enc = SmallTileEncoder()
-            qnn = QNetworkSmall(max(n_valid_actions), d_hidden=128)
+            d_state = self.gameboard.N_col*self.gameboard.N_row
+            d_tile = len(self.gameboard.tiles)
+            valid_actions, n_valid_actions = self.get_valid_actions(d_tile, check_bounds=False)
+            self.n_actions = max(n_valid_actions)
+
+            self.board_encoder = QNetworkFlatten()
+            self.board_encoder.eval()
+            qnn = QNetworkSmall(self.n_actions, d_state=d_state+d_tile, d_hidden=128)
         else:
             n_tile_types = 7
             valid_actions = self.get_valid_actions(n_tile_types)
             n_valid_actions = len(valid_actions)
             d_state = 32
-            d_tile = 4
+            d_tile = 5
             ae = LargeStateAutoEncoder(d_state, 128)
             ae.load_state_dict(torch.load('./src/models/ae_large.pt'))
+            ae.eval()
             tile_enc = LargeTileEncoder()
             qnn = QNetworkLarge(max(n_valid_actions))
+            self.board_encoder = ae.encoder
+            self.board_encoder.eval()
 
-        #ae.eval()
 
         self.d_state = d_state
         self.d_tile = d_tile
@@ -469,8 +368,7 @@ class TDQNAgent:
         self.valid_actions = valid_actions
         self.n_valid_actions = n_valid_actions
 
-        self.board_encoder = ae.encoder
-        self.board_encoder.eval()
+        tile_enc = TileEncoder(d_tile)
 
         self.tile_encoder = tile_enc
         self.qnn = qnn
@@ -506,22 +404,24 @@ class TDQNAgent:
 
     def encode_board(self, board):
         board_enc = self.board_encoder(board)
-        return board_enc[0]
+        return board_enc
 
-    def encode_tile(self, tile_type, tile_orient):
-        tile_enc = self.tile_encoder.encode_tile(tile_type, tile_orient, to_binary=True)
+    def encode_tile(self, tile_type):
+        tile_enc = self.tile_encoder.encode_tile(tile_type)
         return tile_enc
     
     def get_action(self, idx):
+        if idx >= self.n_valid_actions[self.gameboard.cur_tile_type]:
+            return -1, -1
+
         return self.valid_actions[self.gameboard.cur_tile_type][idx]
 
     def fn_read_state(self):
         board = torch.tensor(self.gameboard.board)[None, None, ...]
         tile_type = self.gameboard.cur_tile_type
-        tile_orient = self.gameboard.tile_orientation
 
-        self.board_enc = self.encode_board(board)
-        self.tile_enc = self.encode_tile(tile_type, tile_orient)
+        self.board_enc = self.encode_board(board).flatten()
+        self.tile_enc = self.encode_tile(tile_type)
 
         self.state_enc = torch.concat((self.board_enc, self.tile_enc))
 
@@ -537,10 +437,12 @@ class TDQNAgent:
         n_valid = self.n_valid_actions[self.gameboard.cur_tile_type]
 
         if rng.random() < epsilon:
-            i_action = rng.integers(n_valid)
+            #i_action = rng.integers(n_valid)
+            i_action = rng.integers(self.n_actions)
         else:
             state = self.state_enc
-            qs = self.qnn(state)[:n_valid]
+            qs = self.qnn(state)
+            #qs = self.qnn(state)[:n_valid]
             i_action = torch.argmax(qs)
 
         self.i_action = i_action
@@ -568,19 +470,20 @@ class TDQNAgent:
 
     def fn_reinforce(self, batch):
         self.qnn.train()
-        self.optim.zero_grad()
+        self.qnn_target.eval()
 
         prev_states, actions, rewards, states, terminals = batch
 
         qp = self.qnn(prev_states)
         qt = self.qnn_target(states)
-        q = qp[range(self.batch_size), actions.flatten()]
-        y = rewards.flatten() + terminals.flatten() * (torch.max(qt, dim=-1).values)
+        q = qp[range(self.batch_size), actions]
+        y = rewards + (terminals==0) * (torch.max(qt, dim=-1).values)
 
         loss = self.loss_fn(q, y)
-        loss.backward(retain_graph=True)
+        self.optim.zero_grad()
+        loss.backward()
 
-        #torch.nn.utils.clip_grad_norm_(self.qnn.parameters(), max_norm=10, norm_type=2.0)
+        torch.nn.utils.clip_grad_norm_(self.qnn.parameters(), max_norm=10, norm_type=2.0)
         self.optim.step()
 
 
@@ -601,9 +504,7 @@ class TDQNAgent:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            self.reward_tots[self.episode] = self.episode_reward
             self.episode += 1
-            self.episode_reward = 0
 
             if self.episode % 100 == 0:
                 print('episode '+str(self.episode)+'/'+str(self.episode_count)+' (reward: ',
@@ -622,7 +523,6 @@ class TDQNAgent:
 
             else:
                 if (self.n_exp >= self.replay_buffer_size) and ((self.episode % self.sync_target_episode_count) == 0):
-                    self.qnn.eval()
                     self.qnn_target = copy.deepcopy(self.qnn)
                     pass
                     # TO BE COMPLETED BY STUDENT
@@ -640,7 +540,7 @@ class TDQNAgent:
 
             # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to add the current reward to the total reward for the current episode, so you can save it to disk later
-            self.episode_reward += reward
+            self.reward_tots[self.episode] += reward
 
             # Read the new state
             self.fn_read_state()
@@ -650,15 +550,12 @@ class TDQNAgent:
             t_action = torch.tensor([self.i_action])
             t_reward = torch.tensor([reward])
             t_terminal = torch.tensor([self.gameboard.gameover])
-            #sample = torch.hstack((self.state_prev, t_action, t_reward, self.state_enc))
-            #self.exp_buffer.append((self.state_prev, self.i_action, reward, self.state_enc))
 
             self.buf_prev_states.append(self.state_prev)
             self.buf_actions.append(t_action)
             self.buf_rewards.append(t_reward)
             self.buf_states.append(self.state_enc)
             self.buf_terminals.append(t_terminal)
-            # TODO: Fix TERMINAL STATE
 
             self.n_exp += 1
 
@@ -666,25 +563,13 @@ class TDQNAgent:
                 # TO BE COMPLETED BY STUDENT
                 # Here you should write line(s) to create a variable 'batch' containing 'self.batch_size' quadruplets
 
-                batch_prev_states = []
-                batch_actions = []
-                batch_rewards = []
-                batch_states = []
-                batch_terminals = []
+                idxs = rng.integers(0, self.replay_buffer_size, size=(self.batch_size,))
 
-                for _ in range(self.batch_size):
-                    i = rng.integers(self.replay_buffer_size)
-                    batch_prev_states.append(self.buf_prev_states[i])
-                    batch_actions.append(self.buf_actions[i])
-                    batch_rewards.append(self.buf_rewards[i])
-                    batch_states.append(self.buf_states[i])
-                    batch_terminals.append(self.buf_terminals[i])
-
-                prev_states = torch.stack(batch_prev_states)
-                actions = torch.stack(batch_actions)
-                rewards = torch.stack(batch_rewards)
-                states = torch.stack(batch_states)
-                terminals = torch.stack(batch_terminals)
+                prev_states = torch.stack([self.buf_prev_states[i] for i in idxs])
+                actions = torch.stack([self.buf_actions[i] for i in idxs]).flatten()
+                rewards = torch.stack([self.buf_rewards[i] for i in idxs]).flatten()
+                states = torch.stack([self.buf_states[i] for i in idxs])
+                terminals = torch.stack([self.buf_terminals[i] for i in idxs]).flatten()
 
                 batch = (prev_states, actions, rewards, states, terminals)
                 self.fn_reinforce(batch)
@@ -694,8 +579,6 @@ class TDQNAgent:
                 self.buf_rewards.pop(0)
                 self.buf_states.pop(0)
                 self.buf_terminals.pop(0)
-
-            self.turn += 1
 
 class THumanAgent:
     def fn_init(self, gameboard):
