@@ -654,6 +654,7 @@ class TDQNAgent:
             # Here you should write line(s) to store the state in the experience replay buffer
             t_action = torch.tensor([self.i_action])
             t_reward = torch.tensor([reward])
+            t_terminal = torch.tensor([self.gameboard.gameover])
             #sample = torch.hstack((self.state_prev, t_action, t_reward, self.state_enc))
             #self.exp_buffer.append((self.state_prev, self.i_action, reward, self.state_enc))
 
@@ -661,6 +662,8 @@ class TDQNAgent:
             self.buf_actions.append(t_action)
             self.buf_rewards.append(t_reward)
             self.buf_states.append(self.state_enc)
+            self.buf_terminals.append(t_terminal)
+            # TODO: Fix TERMINAL STATE
 
             self.n_exp += 1
 
@@ -668,19 +671,17 @@ class TDQNAgent:
                 # TO BE COMPLETED BY STUDENT
                 # Here you should write line(s) to create a variable 'batch' containing 'self.batch_size' quadruplets
 
-                self.buf_prev_states.append(self.state_prev)
                 self.buf_prev_states.pop(0)
-                self.buf_actions.append(t_action)
                 self.buf_actions.pop(0)
-                self.buf_rewards.append(t_reward)
                 self.buf_rewards.pop(0)
-                self.buf_states.append(self.state_enc)
                 self.buf_states.pop(0)
+                self.buf_terminals.pop(0)
 
                 batch_prev_states = []
                 batch_actions = []
                 batch_rewards = []
                 batch_states = []
+                batch_terminal = []
 
                 for _ in range(self.batch_size):
                     i = rng.integers(self.replay_buffer_size)
