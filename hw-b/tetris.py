@@ -27,8 +27,8 @@ if evaluate_agent:
 #param_set=PARAM_TASK1b
 #param_set=PARAM_TASK1c
 #param_set=PARAM_TASK1d
-param_set=PARAM_TASK2a
-#param_set=PARAM_TASK2b
+#param_set=PARAM_TASK2a
+param_set=PARAM_TASK2b
 
 # Use files to evaluate strategy
 # If you change 'strategy_file' to the location of a file containing a stored Q-table or Q-network, you can evaluate the success of the found strategy
@@ -144,12 +144,14 @@ elif param_set==PARAM_TASK2b:
     tile_size=4
     max_tile_count=50
     stochastic_prob=1
+    task_name = '2b'
 
     alpha=0.001
     epsilon=0.001
     episode_count=10000
 
     epsilon_scale=50000
+    #epsilon_scale=5000
 
     replay_buffer_size=10000
     batch_size=32
@@ -174,7 +176,7 @@ if human_player:
 gameboard=gameboardClass.TGameBoard(N_row,N_col,tile_size,max_tile_count,agent,stochastic_prob)
 
 if not human_player:
-    agent.fn_init(gameboard, load_strategy=True, save_plot=True, show_plot=True, save_strategy=True, task_name=task_name)
+    agent.fn_init(gameboard, load_strategy=False, save_plot=True, show_plot=True, save_strategy=True, task_name=task_name)
 
 elif evaluate_agent:
     agent_evaluate.fn_init(gameboard, load_strategy=True, save_plot=False, show_plot=False, save_strategy=False, task_name=task_name)
