@@ -174,7 +174,7 @@ if human_player:
 gameboard=gameboardClass.TGameBoard(N_row,N_col,tile_size,max_tile_count,agent,stochastic_prob)
 
 if not human_player:
-    agent.fn_init(gameboard, load_strategy=False, save_plot=True, show_plot=True, save_strategy=True, task_name=task_name)
+    agent.fn_init(gameboard, load_strategy=True, save_plot=True, show_plot=True, save_strategy=True, task_name=task_name)
 
 elif evaluate_agent:
     agent_evaluate.fn_init(gameboard, load_strategy=True, save_plot=False, show_plot=False, save_strategy=False, task_name=task_name)
@@ -239,11 +239,11 @@ if isinstance(gameboard.agent,agentClass.THumanAgent):
                     for yLoop in range(curTile[xLoop][0],curTile[xLoop][1]):
                         pygame.draw.rect(screen,COLOR_RED,[101+20*((xLoop+gameboard.tile_x)%gameboard.N_col),81+20*(gameboard.N_row-(yLoop+gameboard.tile_y)),18,18])
 
-            screen.blit(font.render("Reward: "+str(agent.reward_tots[agent.episode]),True,COLOR_BLACK),[0,0])
+            screen.blit(font.render("Reward: "+str(agent.rewards[agent.episode]),True,COLOR_BLACK),[0,0])
             screen.blit(font.render("Tile "+str(gameboard.tile_count)+"/"+str(gameboard.max_tile_count),True,COLOR_BLACK),[0,20])
             if framerate>0:
                 screen.blit(font.render("FPS: "+str(framerate),True,COLOR_BLACK),[320,0])
-            screen.blit(font.render("Reward: "+str(agent.reward_tots[agent.episode]),True,COLOR_BLACK),[0,0])
+            screen.blit(font.render("Reward: "+str(agent.rewards[agent.episode]),True,COLOR_BLACK),[0,0])
             if gameboard.gameover:
                 screen.blit(fontLarge.render("Game Over", True,COLOR_RED), [80, 200])
                 screen.blit(font.render("Press ESC to try again", True,COLOR_RED), [85, 265])

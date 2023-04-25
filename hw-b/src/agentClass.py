@@ -23,22 +23,27 @@ class SmallStateAutoEncoder(nn.Module):
         self.encoder = nn.Sequential(
             nn.Conv2d(1, 16, 2, padding=1),
             nn.ReLU(),
+            nn.Conv2d(16, 32, 2, padding=0),
+            nn.ReLU(),
             nn.Flatten(1),   # dim 
-            nn.Linear(400, d_H),
+            nn.Linear(512, d_H),
             nn.ReLU(),
             nn.Linear(d_H, d_L),
-            nn.ReLU(),
+            nn.Tanh(),
         )        
 
         self.decoder = nn.Sequential(
             nn.Linear(d_L, d_H),
             nn.ReLU(),
-            nn.Linear(d_H, 256),
+            nn.Linear(d_H, 512),
             nn.ReLU(),
-            nn.Unflatten(1, (16, 4, 4)),
+            nn.Unflatten(1, (32, 4, 4)),
+            nn.ConvTranspose2d(32, 16, 1, stride=1, padding=0),
+            nn.ReLU(),
             nn.ConvTranspose2d(16, 1, 1, stride=1, padding=0),
         )
 
+        self.load_state_dict(torch.load('./src/models/ae_small.pt'))
 
     def forward(self, x):
         x = self.encoder(x)
@@ -86,7 +91,8 @@ class LargeStateAutoEncoder(nn.Module):
 class TileEncoder:
     def __init__(self, d_enc):
         self.d_enc = d_enc
-        self.values = -1 + torch.ones(d_enc, d_enc)
+        
+        self.values = -torch.ones(d_enc, d_enc, dtype=torch.float32)
         for i in range(d_enc):
             self.values[i, i] = 1
 
@@ -125,10 +131,11 @@ class QNetworkSmall(nn.Module):
             nn.Linear(d_hidden, n_valid),
         )
 
+
     def forward(self, state_enc):
         return self.linear(state_enc)
 
-class QNetworkFlatten(nn.Module):
+class StateFlatEncoder(nn.Module):
     def forward(self, x):
         return nn.Flatten(1)(x)
 
@@ -148,14 +155,9 @@ class QNetworkLarge(nn.Module):
     def forward(self, state_enc):
         return self.linear(state_enc)
 
-# This file provides the skeleton structure for the classes TQAgent and TDQNAgent to be completed by you, the student.
-# Locations starting with # TO BE COMPLETED BY STUDENT indicates missing code that should be written by you.
-
 
 class TQAgent:
-    # Agent for learning to play tetris using Q-learning
     def __init__(self, alpha, epsilon, episode_count, moving_avg_size=100):
-        # Initialize training parameters
         self.alpha = alpha
         self.epsilon = epsilon
         self.episode = 0
@@ -318,11 +320,18 @@ class TDQNAgent:
 
 
     def fn_init(self, gameboard, task_name=None, load_strategy=False, save_strategy=False, save_plot=False, show_plot=False):
+        self.task_name = task_name
+        self.load_strategy = load_strategy
+        self.save_strategy = save_strategy
+        self.save_plot = save_plot
+        self.show_plot = show_plot        
+
         self.gameboard = gameboard
         self.exp_buffer = []
         self.episode_reward = 0
-        self.reward_tots = np.zeros(self.episode_count)
+        self.rewards = np.zeros(self.episode_count)
         self.n_exp = 0
+        self.is_large = self.gameboard.tile_size > 2
 
         self.buf_prev_states = []
         self.buf_actions = []
@@ -330,75 +339,59 @@ class TDQNAgent:
         self.buf_states = []
         self.buf_terminals = []
 
-        self.task_name = task_name
-        self.load_strategy = load_strategy
-        self.save_strategy = save_strategy
-        self.save_plot = save_plot
-        self.show_plot = show_plot
-
-        self.is_large = self.gameboard.tile_size > 2
-
         if not self.is_large:
-            d_state = self.gameboard.N_col*self.gameboard.N_row
-            d_tile = len(self.gameboard.tiles)
-            valid_actions, n_valid_actions = self.get_valid_actions(d_tile, check_bounds=False)
-            self.n_actions = max(n_valid_actions)
+            self.d_state = self.gameboard.N_col*self.gameboard.N_row
+            self.d_tile = len(self.gameboard.tiles)
+            self.valid_actions, self.n_valid_actions = self.get_valid_actions(self.d_tile, check_bounds=False)
+            self.n_actions = max(self.n_valid_actions)
 
-            self.board_encoder = QNetworkFlatten()
-            self.board_encoder.eval()
-            qnn = QNetworkSmall(self.n_actions, d_state=d_state+d_tile, d_hidden=128)
+            self.board_encoder = StateFlatEncoder() 
+            self.qnn = QNetworkSmall(self.n_actions, d_state=self.d_state+self.d_tile, d_hidden=128)
+            self.checkpoint_path = './src/checkpoints/cp-small.pt'
         else:
-            n_tile_types = 7
-            valid_actions = self.get_valid_actions(n_tile_types)
-            n_valid_actions = len(valid_actions)
-            d_state = 32
-            d_tile = 5
-            ae = LargeStateAutoEncoder(d_state, 128)
-            ae.load_state_dict(torch.load('./src/models/ae_large.pt'))
-            ae.eval()
-            tile_enc = LargeTileEncoder()
-            qnn = QNetworkLarge(max(n_valid_actions))
-            self.board_encoder = ae.encoder
-            self.board_encoder.eval()
+            self.d_state = self.gameboard.N_col * self.gameboard.N_row
+            self.d_tile = len(self.gameboard.tiles)
+            self.valid_actions, self.n_valid_actions = self.get_valid_actions(self.d_tile, check_bounds=False)
+            self.n_actions = max(self.n_valid_actions)
 
+            #ae = LargeStateAutoEncoder(d_state, 128)
+            #ae.load_state_dict(torch.load('./src/models/ae_large.pt'))
+            #ae.eval()
+            #tile_enc = LargeTileEncoder()
+            #qnn = QNetworkLarge(max(n_valid_actions))
+            #self.board_encoder = ae.encoder
+            #self.board_encoder.eval()
 
-        self.d_state = d_state
-        self.d_tile = d_tile
+            self.board_encoder = StateFlatEncoder()
+            self.qnn = QNetworkLarge(self.n_actions, d_state=self.d_state+self.d_tile, d_hidden=128)
+            self.checkpoint_path = './src/checkpoints/large.pt'
 
-        self.valid_actions = valid_actions
-        self.n_valid_actions = n_valid_actions
+        self.tile_encoder = TileEncoder(self.d_tile)
 
-        tile_enc = TileEncoder(d_tile)
-
-        self.tile_encoder = tile_enc
-        self.qnn = qnn
-        self.qnn_target = copy.deepcopy(qnn)
+        self.tnn = copy.deepcopy(self.qnn)
 
         self.qnn.eval()
-        self.qnn_target.eval()
+        self.tnn.requires_grad_(False)
 
         self.optim = torch.optim.Adam(self.qnn.parameters(), lr=self.alpha)
         self.loss_fn = nn.MSELoss()
 
-        #print(self.gameboard.board)
-        # TO BE COMPLETED BY STUDENT
-        # This function should be written by you
-        # Instructions:
-        # In this function you could set up and initialize the states, actions, the Q-networks (one for calculating actions and one target network), experience replay buffer and storage for the rewards
-        # You can use any framework for constructing the networks, for example pytorch or tensorflow
-        # This function should not return a value, store Q network etc as attributes of self
-        
-
-        # Useful variables:
-        # 'gameboard.N_row' number of rows in gameboard
-        # 'gameboard.N_col' number of columns in gameboard
-        # 'len(gameboard.tiles)' number of different tiles
-        # 'self.alpha' the learning rate for stochastic gradient descent
-        # 'self.episode_count' the total number of episodes in the training
-        # 'self.replay_buffer_size' the number of quadruplets stored in the experience replay buffer
+        if load_strategy:
+            self.fn_load_strategy(self.checkpoint_path)
 
     def fn_load_strategy(self, strategy_file):
-        pass
+        cp = torch.load(strategy_file)
+        self.qnn.load_state_dict(cp['qnn'])
+        self.tnn.load_state_dict(cp['tnn'])
+        self.rewards = cp['rewards_tot']
+        self.buf_prev_states = cp['states_old']
+        self.buf_actions = cp['actions']
+        self.buf_rewards = cp['rewards']
+        self.buf_states = cp['states_new']
+        self.buf_terminals = cp['terminals']
+        self.n_exp = cp['n_exp']
+        self.episode = cp['episode']
+
         # TO BE COMPLETED BY STUDENT
         # Here you can load the Q-network (to Q-network of self) from the strategy_file
 
@@ -467,13 +460,12 @@ class TDQNAgent:
 
     def fn_reinforce(self, batch):
         self.qnn.train()
-        self.qnn_target.eval()
         self.optim.zero_grad()
 
         prev_states, actions, rewards, states, terminals = batch
 
         qp = self.qnn(prev_states)
-        qt = self.qnn_target(states)
+        qt = self.tnn(states)
         q = qp[range(self.batch_size), actions]
         y = rewards + (terminals==0) * (torch.max(qt, dim=-1).values)
 
@@ -495,7 +487,7 @@ class TDQNAgent:
         # The input argument 'batch' contains a sample of quadruplets used to update the Q-network
 
     def fn_turn(self):
-        if self.gameboard.gameover:
+        if self.gameboard.gameover or (self.episode >= self.episode_count):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -503,54 +495,51 @@ class TDQNAgent:
 
             if self.episode % 100 == 0:
                 print('episode '+str(self.episode)+'/'+str(self.episode_count)+' (reward: ',
-                      str(np.sum(self.reward_tots[range(self.episode-100, self.episode)])), ')')
+                      str(np.sum(self.rewards[range(self.episode-100, self.episode)])), ')')
 
             if self.episode % 1000 == 0:
                 saveEpisodes = [1000, 2000, 5000, 10000, 20000,
                                 50000, 100000, 200000, 500000, 1000000]
                 if self.episode in saveEpisodes:
+                    self.save_state()
+                    
+                    
                     pass
                     # TO BE COMPLETED BY STUDENT
                     # Here you can save the rewards and the Q-network to data files
+                    
 
             if self.episode >= self.episode_count:
+                self.save_metrics()
                 raise SystemExit(0)
 
             else:
                 if (self.n_exp >= self.replay_buffer_size) and ((self.episode % self.sync_target_episode_count) == 0):
-                    self.qnn_target = copy.deepcopy(self.qnn)
+                    self.tnn = copy.deepcopy(self.qnn)
+                    self.tnn.requires_grad_(False)
                     pass
                     # TO BE COMPLETED BY STUDENT
                     # Here you should write line(s) to copy the current network to the target network
                 self.gameboard.fn_restart()
         else:
-            # Select and execute action (move the tile to the desired column and orientation)
             self.fn_select_action()
-            # TO BE COMPLETED BY STUDENT
-            # Here you should write line(s) to copy the old state into the variable 'old_state' which is later stored in the ecperience replay buffer
             self.state_prev = self.state_enc
 
-            # Drop the tile on the game board
             reward = self.gameboard.fn_drop()
+            self.rewards[self.episode] += reward
 
-            # TO BE COMPLETED BY STUDENT
-            # Here you should write line(s) to add the current reward to the total reward for the current episode, so you can save it to disk later
-            self.reward_tots[self.episode] += reward
-
-            # Read the new state
             self.fn_read_state()
 
-            # TO BE COMPLETED BY STUDENT
-            # Here you should write line(s) to store the state in the experience replay buffer
             t_action = torch.tensor([self.i_action])
             t_reward = torch.tensor([reward])
             t_terminal = torch.tensor([self.gameboard.gameover])
 
-            self.buf_prev_states.append(self.state_prev)
-            self.buf_actions.append(t_action)
-            self.buf_rewards.append(t_reward)
-            self.buf_states.append(self.state_enc)
-            self.buf_terminals.append(t_terminal)
+            #self.buf_prev_states.append(self.state_prev)
+            #self.buf_actions.append(t_action)
+            #self.buf_rewards.append(t_reward)
+            #self.buf_states.append(self.state_enc)
+            #self.buf_terminals.append(t_terminal)
+            self.add_buffer(self.state_prev, t_action, t_reward, self.state_enc, t_terminal)
 
             self.n_exp += 1
 
@@ -558,22 +547,76 @@ class TDQNAgent:
                 # TO BE COMPLETED BY STUDENT
                 # Here you should write line(s) to create a variable 'batch' containing 'self.batch_size' quadruplets
 
-                idxs = rng.integers(0, self.replay_buffer_size, size=(self.batch_size,))
+                prev_states, actions, rewards, states, terminals = [],[],[],[],[]
+                for _ in range(self.batch_size):
+                    idx = rng.integers(len(self.buf_prev_states))
 
-                prev_states = torch.stack([self.buf_prev_states[i] for i in idxs])
-                actions = torch.stack([self.buf_actions[i] for i in idxs]).flatten()
-                rewards = torch.stack([self.buf_rewards[i] for i in idxs]).flatten()
-                states = torch.stack([self.buf_states[i] for i in idxs])
-                terminals = torch.stack([self.buf_terminals[i] for i in idxs]).flatten()
+                    prev_states.append(self.buf_prev_states.pop(idx))
+                    actions.append(self.buf_actions.pop(idx))
+                    rewards.append(self.buf_rewards.pop(idx))
+                    states.append(self.buf_states.pop(idx))
+                    terminals.append(self.buf_terminals.pop(idx))
+                    
 
-                batch = (prev_states, actions, rewards, states, terminals)
-                self.fn_reinforce(batch)
+                #idxs = rng.integers(0, self.replay_buffer_size, size=(self.batch_size,))
+                #prev_states = torch.stack([self.buf_prev_states[i] for i in idxs])
+                #actions = torch.stack([self.buf_actions[i] for i in idxs]).flatten()
+                #rewards = torch.stack([self.buf_rewards[i] for i in idxs]).flatten()
+                #states = torch.stack([self.buf_states[i] for i in idxs])
+                #terminals = torch.stack([self.buf_terminals[i] for i in idxs]).flatten()
 
-                self.buf_prev_states.pop(0)
-                self.buf_actions.pop(0)
-                self.buf_rewards.pop(0)
-                self.buf_states.pop(0)
-                self.buf_terminals.pop(0)
+                batch = 
+                self.fn_reinforce((
+                    torch.stack(prev_states), 
+                    torch.stack(actions).flatten(), 
+                    torch.stack(rewards).flatten(), 
+                    torch.stack(states), 
+                    torch.stack(terminals).flatten()
+                ))
+
+                #self.buf_prev_states.pop(0)
+                #self.buf_actions.pop(0)
+                #self.buf_rewards.pop(0)
+                #self.buf_states.pop(0)
+                #self.buf_terminals.pop(0)
+
+    def save_metrics(self):
+        plt.plot(np.arange(len(self.rewards)), self.rewards)
+        plt.plot(self.moving_avg_size*np.arange(len(self.avg_rewards)), self.avg_rewards)
+        plt.legend(['Rewards', f'Moving average [T={self.moving_avg_size}]'])
+        plt.title(f'Rewards and moving average rewards over episode, task {self.task_name}')
+        plt.xlabel(r'Episode $E$')
+        plt.ylabel(r'Reward $R$')
+        
+        if self.save_plot:
+            plt.savefig(f'./src/plots/fig-{self.task_name}.png')
+
+        if self.show_plot:
+            plt.show()
+
+    def add_buffer(self, state_prev, action, reward, state_new, terminal):
+        self.buf_prev_states.append(state_prev)
+        self.buf_actions.append(action)
+        self.buf_rewards.append(reward)
+        self.buf_states.append(state_new)
+        self.buf_terminals.append(terminal)
+
+    def save_state(self):
+        self.qnn.eval()                    
+        torch.save({
+            'qnn': self.qnn.state_dict(),
+            'tnn': self.tnn.state_dict(),
+            'rewards_tot': self.rewards,
+            'states_old': self.buf_prev_states,
+            'states_new': self.buf_states,
+            'actions': self.buf_actions,
+            'rewards': self.buf_rewards,
+            'terminals': self.buf_terminals,
+            'episode': self.episode,
+            'n_exp': self.n_exp
+        }, self.checkpoint_path)
+
+    
 
 class THumanAgent:
     def fn_init(self, gameboard):
